@@ -123,6 +123,8 @@ async def fetch_asset_details(session: aiohttp.ClientSession, asset_id: str, max
             async with session.get(url) as response:
                 if response.status == 200:
                     return await response.json()
+                elif response.status in [400, 403]:
+                    return await response.json()
                 elif response.status == 429:
                     await asyncio.sleep(0.5 * (attempt + 1))
                     continue
@@ -291,14 +293,12 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
             parsed_joined = urlparse(joined)
             parsed_master = urlparse(master_url)
             
-            # Só injeta as credenciais se o domínio for exatamente o mesmo, evitando erro 403
             if not urlparse(target_path).query:
                 if parsed_joined.netloc == parsed_master.netloc:
                     joined = urlunparse(parsed_joined._replace(query=parsed_master.query))
                 
             return joined
 
-        # Finge ser um navegador padrão para evitar bloqueio WAF de bots pelo Roblox
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         }
@@ -340,7 +340,6 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         logger.info(f"Quantidade de segmentos encontrados: {len(segments)}")
         logger.info(f"Baixando {len(segments)} segmentos HLS para {base_name}...")
         
-        # Garante que o diretório base possua a pasta exata da qualidade solicitada (ex: /720/)
         segments_base_path = best_playlist_url
 
         for i, seg in enumerate(segments):
@@ -409,24 +408,55 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         logger.error(f"Erro geral processando HLS: {e}")
         return None
 
+async def fetch_version_fallback(session: aiohttp.ClientSession, asset_id: str, cookie: str = None, max_versions=10):
+    for version in range(1, max_versions + 1):
+        url = f"https://assetdelivery.roproxy.com/v1/asset/?id={asset_id}&version={version}"
+        headers = {
+            "User-Agent": "Roblox/WinInet",
+            "Roblox-Browser-Asset-Request": "false"
+        }
+        
+        if cookie:
+            headers["Cookie"] = f".ROBLOSECURITY={cookie}"
+            
+        try:
+            async with session.get(url, headers=headers, allow_redirects=True) as response:
+                if response.status == 200:
+                    content_type = response.headers.get('Content-Type', '')
+                    if 'text/html' not in content_type.lower() and 'application/json' not in content_type.lower():
+                        logger.info(f"Asset {asset_id} - Sucesso ao recuperar a versao {version} que escapou da moderacao!")
+                        return url
+        except Exception as e:
+            logger.debug(f"Erro ao testar versao {version} do asset {asset_id}: {e}")
+            
+        await asyncio.sleep(0.5)
+        
+    return None
+
 async def download_core(session: aiohttp.ClientSession, asset_id: str):
     details = await fetch_asset_details(session, asset_id)
-    if not details:
-        logger.error(f"Asset {asset_id} - Falha ao obter detalhes.")
-        return None, f"Falha ao obter detalhes do asset {asset_id}"
+    
+    asset_name = str(asset_id)
+    asset_type_id = None
+    creator_id = None
+    creator_type = None
+    target_asset_type_str = "Unknown"
+    expected_extension = ".bin"
 
-    asset_name = details.get("Name", str(asset_id))
-    asset_type_id = details.get("AssetTypeId")
-    creator = details.get("Creator", {})
-    creator_id = creator.get("CreatorTargetId")
-    creator_type = creator.get("CreatorType")
-    
+    if details and "errors" not in details:
+        asset_name = details.get("Name", str(asset_id))
+        asset_type_id = details.get("AssetTypeId")
+        creator = details.get("Creator", {})
+        creator_id = creator.get("CreatorTargetId")
+        creator_type = creator.get("CreatorType")
+        
+        type_info = ASSET_TYPES.get(asset_type_id, ("Model", ".bin"))
+        target_asset_type_str = type_info[0]
+        expected_extension = type_info[1]
+    else:
+        logger.warning(f"Asset {asset_id} - Detalhes negados (provavelmente moderado). Forcando bypass direto...")
+
     sanitized_name = sanitize_filename(asset_name)
-    
-    type_info = ASSET_TYPES.get(asset_type_id, ("Model", ".bin"))
-    target_asset_type_str = type_info[0]
-    expected_extension = type_info[1]
-    
     logger.info(f"Processando Asset {asset_id} | Nome: {sanitized_name} | TypeID: {asset_type_id} ({target_asset_type_str})")
 
     if asset_type_id in NO_BINARY_TYPES:
@@ -434,34 +464,36 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
         logger.warning(msg)
         return None, msg
 
-    logger.info(f"Asset {asset_id} - Tentando obter URL de forma publica...")
-    asset_url = await fetch_asset_location(session, asset_id, target_asset_type_str)
-    
-    if asset_url:
-        logger.info(f"Asset {asset_id} - URL publica obtida com sucesso!")
-    else:
-        logger.info(f"Asset {asset_id} - Acesso publico negado. Tentando fallback com PlaceIds e Cookie...")
-        
-        if not creator_id:
-            msg = f"Asset {asset_id} - Nao foi possivel obter o criador do asset para o fallback."
-            logger.error(msg)
-            return None, msg
+    asset_url = None
 
-        place_ids = await fetch_creator_games(session, creator_id, creator_type)
+    if asset_type_id:
+        logger.info(f"Asset {asset_id} - Tentando obter URL de forma publica...")
+        asset_url = await fetch_asset_location(session, asset_id, target_asset_type_str)
         
-        if not place_ids:
-            msg = f"Asset {asset_id} - Nenhuma experiencia encontrada para o criador."
-            logger.warning(msg)
-            return None, msg
-
-        for pid in place_ids:
-            asset_url = await fetch_asset_location(session, asset_id, target_asset_type_str, pid, ROBLOX_COOKIE)
-            if asset_url:
-                logger.info(f"Asset {asset_id} - URL obtida via fallback (PlaceID: {pid}).")
-                break
+        if asset_url:
+            logger.info(f"Asset {asset_id} - URL publica obtida com sucesso!")
+        else:
+            logger.info(f"Asset {asset_id} - Acesso publico negado. Tentando fallback com PlaceIds e Cookie...")
+            
+            if creator_id:
+                place_ids = await fetch_creator_games(session, creator_id, creator_type)
+                if place_ids:
+                    for pid in place_ids:
+                        asset_url = await fetch_asset_location(session, asset_id, target_asset_type_str, pid, ROBLOX_COOKIE)
+                        if asset_url:
+                            logger.info(f"Asset {asset_id} - URL obtida via fallback (PlaceID: {pid}).")
+                            break
+                else:
+                    logger.warning(f"Asset {asset_id} - Nenhuma experiencia encontrada para o criador.")
+            else:
+                logger.error(f"Asset {asset_id} - Nao foi possivel obter o criador do asset para o fallback.")
 
     if not asset_url:
-        msg = f"Asset {asset_id} - URL de download inacessivel apos todas as tentativas."
+        logger.info(f"Asset {asset_id} - Tentando bypass de historico de versoes (forçado)...")
+        asset_url = await fetch_version_fallback(session, asset_id, ROBLOX_COOKIE)
+
+    if not asset_url:
+        msg = f"Asset {asset_id} - URL de download inacessivel. O item provavelmente foi excluido permanentemente e não possui versões salvas."
         logger.error(msg)
         return None, msg
 
