@@ -653,7 +653,7 @@ client = RobloxAssetBot()
 
 @client.tree.command(name="asset", description="Baixa um unico asset do Roblox de forma segura")
 async def asset(interaction: discord.Interaction, asset_id: str):
-    await interaction.response.send_message("Processando...\n`🟩`")
+    await interaction.response.send_message("Processando...\n🟩")
     
     async def progress_task():
         try:
@@ -661,7 +661,7 @@ async def asset(interaction: discord.Interaction, asset_id: str):
             while i < 10:
                 await asyncio.sleep(1)
                 i += 1
-                await interaction.edit_original_response(content=f"Processando...\n{'`🟩`' * i}")
+                await interaction.edit_original_response(content=f"Processando...\n{'🟩' * i}")
         except asyncio.CancelledError:
             pass
 
@@ -673,7 +673,7 @@ async def asset(interaction: discord.Interaction, asset_id: str):
         file_path, error = await download_core(session, clean_id)
         
     ptask.cancel()
-    await interaction.edit_original_response(content="Processando...\n`🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩`")
+    await interaction.edit_original_response(content="Processando...\n🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩")
         
     if file_path and os.path.exists(file_path):
         has_a = file_path.endswith('.ogg')
