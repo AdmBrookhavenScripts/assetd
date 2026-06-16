@@ -382,7 +382,8 @@ func processHLSPlaylist(m3u8Path string, baseURL string) string {
 	m3u8Content := string(content)
 	lines := strings.Split(m3u8Content, "\n")
 	
-	logInfo("Tipo de playlist detectada. Primeiras linhas: %v", lines[:func() int { if len(lines) < 5 { return len(lines) } return 5 }()])
+	count := min(len(lines), 5)
+    logInfo("Tipo de playlist detectada. Primeiras linhas: %v", lines[:count])
 
 	rbxBaseURI := ""
 	reRbxBase := regexp.MustCompile(`#EXT-X-DEFINE:NAME="RBX-BASE-URI",VALUE="([^"]+)"`)
