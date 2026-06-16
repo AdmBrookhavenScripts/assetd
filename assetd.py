@@ -653,7 +653,7 @@ client = RobloxAssetBot()
 
 @client.tree.command(name="asset", description="Baixa um unico asset do Roblox de forma segura")
 async def asset(interaction: discord.Interaction, asset_id: str):
-    await interaction.response.send_message("Processando...\n🟩")
+    await interaction.response.send_message("Processando...\n`🟩`")
     
     async def progress_task():
         try:
@@ -661,7 +661,7 @@ async def asset(interaction: discord.Interaction, asset_id: str):
             while i < 10:
                 await asyncio.sleep(1)
                 i += 1
-                await interaction.edit_original_response(content=f"Processando...\n{'🟩' * i}")
+                await interaction.edit_original_response(content=f"Processando...\n{'`🟩`' * i}")
         except asyncio.CancelledError:
             pass
 
@@ -673,7 +673,7 @@ async def asset(interaction: discord.Interaction, asset_id: str):
         file_path, error = await download_core(session, clean_id)
         
     ptask.cancel()
-    await interaction.edit_original_response(content="Processando...\n🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩")
+    await interaction.edit_original_response(content="Processando...\n`🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩`")
         
     if file_path and os.path.exists(file_path):
         has_a = file_path.endswith('.ogg')
@@ -735,6 +735,7 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
 
     downloaded_files = []
     errors = []
+    failed_ids = []
 
     async with aiohttp.ClientSession() as session:
         results = []
@@ -745,15 +746,19 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
             except Exception as e:
                 results.append(e)
 
-    for res in results:
+    for aid, res in zip(ids_list, results):
         if isinstance(res, tuple):
             path, err = res
+
             if path:
                 downloaded_files.append(path)
-            elif err:
-                errors.append(err)
         else:
-            errors.append(f"Excecao severa: {str(res)}")
+            failed_ids.append(aid)
+            if err:
+                errors.append(err)
+    else:
+        failed_ids.append(aid)
+        errors.append(f"Excecao severa: {str(res)}")
 
     ptask.cancel()
     await interaction.edit_original_response(content="Processando...\n🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩")
@@ -797,8 +802,13 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
     await asyncio.to_thread(create_zip)
 
     final_msg = f"Lote concluido: {len(downloaded_files)} arquivos processados."
-    if errors:
-        final_msg += f"\nFalhas ({len(errors)}): verifique os logs internos."
+    if failed_ids:
+        final_msg += f"\nFalhas ({len(failed_ids)}): "
+
+    if len(failed_ids) == 1:
+        final_msg += failed_ids[0]
+    else:
+        final_msg += ", ".join(f"`{i}`" for i in failed_ids)
 
     if os.path.exists(zip_filename):
         if os.path.getsize(zip_filename) > 10 * 1024 * 1024:
