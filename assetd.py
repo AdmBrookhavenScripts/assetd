@@ -707,8 +707,13 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
     errors = []
 
     async with aiohttp.ClientSession() as session:
-        tasks = [download_core(session, aid) for aid in ids_list]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+        results = []
+        for aid in ids_list:
+            try:
+                res = await download_core(session, aid)
+                results.append(res)
+            except Exception as e:
+                results.append(e)
 
     for res in results:
         if isinstance(res, tuple):
