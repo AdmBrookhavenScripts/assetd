@@ -678,14 +678,8 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
     errors = []
 
     async with aiohttp.ClientSession() as session:
-        results = []
-        # Corrigido: Agora processa de forma sequencial, idêntico ao /asset, evitando que a API do Roblox/RoProxy bloqueie o bot.
-        for aid in ids_list:
-            try:
-                res = await download_core(session, aid)
-                results.append(res)
-            except Exception as e:
-                results.append(e)
+        tasks = [download_core(session, aid) for aid in ids_list]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
 
     for res in results:
         if isinstance(res, tuple):
