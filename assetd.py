@@ -514,25 +514,28 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
         logger.info(f"Asset {asset_id} - Tentando bypass de historico de versoes (forçado)...")
         asset_url = await fetch_version_fallback(session, asset_id, ROBLOX_COOKIE)
 
-    if not asset_url and FALLBACK_GAMES:
-        logger.info(
-        f"Asset {asset_id} - Tentando {len(FALLBACK_GAMES)} jogos de fallback-games.txt..."
-        )
-
-    for place_id in FALLBACK_GAMES:
-        asset_url = await fetch_asset_location(
-            session,
-            asset_id,
-            target_asset_type_str,
-            place_id,
-            ROBLOX_COOKIE
-        )
-
-        if asset_url:
+        if not asset_url and FALLBACK_GAMES:
             logger.info(
-                f"Asset {asset_id} - URL obtida via fallback-games.txt (PlaceID: {place_id})"
+            f"Asset {asset_id} - Tentando {len(FALLBACK_GAMES)} jogos de fallback-games.txt..."
             )
-            break
+        
+        fallback_type = target_asset_type_str if target_asset_type_str != "Unknown" else "Model"
+
+        for place_id in FALLBACK_GAMES:
+            test_url = await fetch_asset_location(
+                session,
+                asset_id,
+                fallback_type,
+                place_id,
+                ROBLOX_COOKIE
+            )
+
+            if test_url:
+                asset_url = test_url
+                logger.info(
+                    f"Asset {asset_id} - URL obtida via fallback-games.txt (PlaceID: {place_id})"
+                )
+                break
 
     if not asset_url:
         msg = f"Asset {asset_id} - URL de download inacessivel. O item provavelmente foi excluido permanentemente e não possui versões salvas."
