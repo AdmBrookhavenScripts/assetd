@@ -157,7 +157,7 @@ async def fetch_asset_details(session: aiohttp.ClientSession, asset_id: str, max
     return None
 
 async def fetch_asset_location(session: aiohttp.ClientSession, asset_id: str, asset_type: str, place_id=None, cookie=None):
-    url = 'https://assetdelivery.roblox.com/v2/assets/batch'
+    url = 'https://assetdelivery.roproxy.com/v2/assets/batch'
     body_array = [{
         "assetId": asset_id,
         "assetType": asset_type,
@@ -187,6 +187,10 @@ async def fetch_asset_location(session: aiohttp.ClientSession, asset_id: str, as
     except Exception as e:
         logger.debug(f"Erro ao buscar localizacao do asset {asset_id} (Place: {place_id}): {e}")
     return None
+
+def sanitize_filename(name: str) -> str:
+    sanitized = re.sub(r'[\\/*?"<>|]', '', name)
+    return sanitized.replace(" ", "_")
 
 async def convert_media(input_path: str, format: str) -> str:
     if not format or input_path.endswith(format):
@@ -250,10 +254,6 @@ async def convert_media(input_path: str, format: str) -> str:
         logger.error(f"Erro no FFmpeg: {e}")
 
     return input_path
-
-def sanitize_filename(name: str) -> str:
-    sanitized = re.sub(r'[\\/*?"<>|]', '', name)
-    return sanitized.replace(" ", "_")
 
 async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, base_url: str) -> str:
     logger.info(f"Processando playlist HLS: {m3u8_path}")
@@ -430,6 +430,31 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         logger.error(f"Erro geral processando HLS: {e}")
         return None
 
+async def fetch_version_fallback(session: aiohttp.ClientSession, asset_id: str, cookie: str = None, max_versions=10):
+    for version in range(1, max_versions + 1):
+        url = f"https://assetdelivery.roproxy.com/v1/asset/?id={asset_id}&version={version}"
+        headers = {
+            "User-Agent": "Roblox/WinInet",
+            "Roblox-Browser-Asset-Request": "false"
+        }
+        
+        if cookie:
+            headers["Cookie"] = f".ROBLOSECURITY={cookie}"
+            
+        try:
+            async with session.get(url, headers=headers, allow_redirects=True) as response:
+                if response.status == 200:
+                    content_type = response.headers.get('Content-Type', '')
+                    if 'text/html' not in content_type.lower() and 'application/json' not in content_type.lower():
+                        logger.info(f"Asset {asset_id} - Sucesso ao recuperar a versao {version} que escapou da moderacao!")
+                        return url
+        except Exception as e:
+            logger.debug(f"Erro ao testar versao {version} do asset {asset_id}: {e}")
+            
+        await asyncio.sleep(0.5)
+        
+    return None
+
 async def download_core(session: aiohttp.ClientSession, asset_id: str):
     details = await fetch_asset_details(session, asset_id)
     
@@ -485,10 +510,14 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
             else:
                 logger.error(f"Asset {asset_id} - Nao foi possivel obter o criador do asset para o fallback.")
 
-    if not asset_url and FALLBACK_GAMES:
-        logger.info(
-        f"Asset {asset_id} - Tentando {len(FALLBACK_GAMES)} jogos de fallback-games.txt..."
-        )
+    if not asset_url:
+        logger.info(f"Asset {asset_id} - Tentando bypass de historico de versoes (forçado)...")
+        asset_url = await fetch_version_fallback(session, asset_id, ROBLOX_COOKIE)
+
+        if not asset_url and FALLBACK_GAMES:
+            logger.info(
+            f"Asset {asset_id} - Tentando {len(FALLBACK_GAMES)} jogos de fallback-games.txt..."
+            )
 
         for place_id in FALLBACK_GAMES:
             test_url = await fetch_asset_location(
