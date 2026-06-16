@@ -497,6 +497,12 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
         asset_url = await fetch_asset_location(session, asset_id, target_asset_type_str, 9391468976, ROBLOX_COOKIE)
         if asset_url:
             logger.info(f"Asset {asset_id} - URL obtida via Place ID fixo.")
+            
+    if not asset_url:
+        logger.info(f"Asset {asset_id} - Tentando Place ID de fallback fixo (2592032536)...")
+        asset_url = await fetch_asset_location(session, asset_id, target_asset_type_str, 2592032536, ROBLOX_COOKIE)
+        if asset_url:
+            logger.info(f"Asset {asset_id} - URL obtida via Place ID fixo.")
 
     if not asset_url:
         msg = f"Asset {asset_id} - URL de download inacessivel. O item provavelmente foi excluido permanentemente e não possui versões salvas."
