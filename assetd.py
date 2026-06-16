@@ -157,7 +157,7 @@ async def fetch_asset_details(session: aiohttp.ClientSession, asset_id: str, max
     return None
 
 async def fetch_asset_location(session: aiohttp.ClientSession, asset_id: str, asset_type: str, place_id=None, cookie=None):
-    url = 'https://assetdelivery.roproxy.com/v2/assets/batch'
+    url = 'https://assetdelivery.roblox.com/v2/assets/batch'
     body_array = [{
         "assetId": asset_id,
         "assetType": asset_type,
@@ -187,10 +187,6 @@ async def fetch_asset_location(session: aiohttp.ClientSession, asset_id: str, as
     except Exception as e:
         logger.debug(f"Erro ao buscar localizacao do asset {asset_id} (Place: {place_id}): {e}")
     return None
-
-def sanitize_filename(name: str) -> str:
-    sanitized = re.sub(r'[\\/*?"<>|]', '', name)
-    return sanitized.replace(" ", "_")
 
 async def convert_media(input_path: str, format: str) -> str:
     if not format or input_path.endswith(format):
@@ -254,6 +250,10 @@ async def convert_media(input_path: str, format: str) -> str:
         logger.error(f"Erro no FFmpeg: {e}")
 
     return input_path
+
+def sanitize_filename(name: str) -> str:
+    sanitized = re.sub(r'[\\/*?"<>|]', '', name)
+    return sanitized.replace(" ", "_")
 
 async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, base_url: str) -> str:
     logger.info(f"Processando playlist HLS: {m3u8_path}")
@@ -432,7 +432,7 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
 
 async def fetch_version_fallback(session: aiohttp.ClientSession, asset_id: str, cookie: str = None, max_versions=10):
     for version in range(1, max_versions + 1):
-        url = f"https://assetdelivery.roproxy.com/v1/asset/?id={asset_id}&version={version}"
+        url = f"https://assetdelivery.roblox.com/v1/asset/?id={asset_id}&version={version}"
         headers = {
             "User-Agent": "Roblox/WinInet",
             "Roblox-Browser-Asset-Request": "false"
