@@ -1,22 +1,15 @@
-FROM golang:1.24 AS builder
-
-WORKDIR /app
-
-COPY . .
-
-RUN go mod download
-RUN go mod tidy
-RUN CGO_ENABLED=0 GOOS=linux go build -o assetd assetd.go
-
-FROM debian:bookworm-slim
+FROM python:3.12-slim
 
 RUN apt-get update && \
-    apt-get install -y ffmpeg ca-certificates && \
+    apt-get install -y ffmpeg && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-COPY --from=builder /app/assetd .
-COPY fallback-games.txt .
+COPY requirements.txt .
 
-CMD ["./assetd"]
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+CMD ["python", "assetd.py"]
