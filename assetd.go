@@ -921,36 +921,14 @@ func handleInteractionCreate(s *discordgo.Session, i *discordgo.InteractionCreat
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
-					Content: "Processando...\n🟩",
+					Content: "**Processando...**",
 				},
 			})
-
-			ctx, cancel := context.WithCancel(context.Background())
-			go func() {
-				squares := 1
-				for {
-					select {
-					case <-ctx.Done():
-						return
-					case <-time.After(1 * time.Second):
-						squares++
-						if squares >= 10 {
-							return
-						}
-						msg := "Processando...\n" + strings.Repeat("🟩", squares)
-						s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{Content: &msg})
-					}
-				}
-			}()
 
 			assetID := data.Options[0].StringValue()
 			cleanID := strings.TrimSpace(assetID)
 
 			filePath, errStr := downloadCore(cleanID)
-			cancel()
-
-			msg := "Processando...\n🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩"
-			s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{Content: &msg})
 
 			if filePath != "" && errStr == "" {
 				hasA := strings.HasSuffix(filePath, ".ogg")
@@ -1023,31 +1001,6 @@ func handleInteractionCreate(s *discordgo.Session, i *discordgo.InteractionCreat
 		}
 
 		if data.Name == "assetbatch" {
-			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-				Type: discordgo.InteractionResponseChannelMessageWithSource,
-				Data: &discordgo.InteractionResponseData{
-					Content: "Processando...\n🟩",
-				},
-			})
-
-			ctx, cancel := context.WithCancel(context.Background())
-			go func() {
-				squares := 1
-				for {
-					select {
-					case <-ctx.Done():
-						return
-					case <-time.After(1500 * time.Millisecond):
-						squares++
-						if squares >= 10 {
-							return
-						}
-						msg := "Processando...\n" + strings.Repeat("🟩", squares)
-						s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{Content: &msg})
-					}
-				}
-			}()
-
 			assetIDsRaw := data.Options[0].StringValue()
 			var idsList []string
 			for _, x := range strings.Split(assetIDsRaw, ",") {
@@ -1057,18 +1010,31 @@ func handleInteractionCreate(s *discordgo.Session, i *discordgo.InteractionCreat
 				}
 			}
 
-			if len(idsList) > 20 {
-				cancel()
+			totalAssets := len(idsList)
+
+			if totalAssets > 20 {
 				msg := "Por favor, limite a 20 assets por lote para evitar sobrecarga."
-				s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{Content: &msg})
+				s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+					Type: discordgo.InteractionResponseChannelMessageWithSource,
+					Data: &discordgo.InteractionResponseData{
+						Content: msg,
+					},
+				})
 				return
 			}
+
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Content: fmt.Sprintf("**Processando... (0/%d assets)**", totalAssets),
+				},
+			})
 
 			var downloadedFiles []string
 			var errors []string
 			var failedIds []string
 
-			for _, aid := range idsList {
+			for idx, aid := range idsList {
 				path, errStr := downloadCore(aid)
 				if path != "" && errStr == "" {
 					if info, err := os.Stat(path); err == nil && info.Size() > 0 {
@@ -1084,11 +1050,11 @@ func handleInteractionCreate(s *discordgo.Session, i *discordgo.InteractionCreat
 						errors = append(errors, errStr)
 					}
 				}
-			}
 
-			cancel()
-			msg := "Processando...\n🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩"
-			s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{Content: &msg})
+				current := idx + 1
+				msg := fmt.Sprintf("**Processando... (%d/%d assets)**", current, totalAssets)
+				s.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{Content: &msg})
+			}
 
 			if len(downloadedFiles) == 0 {
 				errsJoined := strings.Join(errors, "\n")
@@ -1164,9 +1130,14 @@ func handleInteractionCreate(s *discordgo.Session, i *discordgo.InteractionCreat
 
 			for _, file := range downloadedFiles {
 				if info, err := os.Stat(file); err == nil && info.Size() > 0 {
-					fWriter, _ := zipWriter.Create(filepath.Base(file))
-					b, _ := os.ReadFile(file)
-					fWriter.Write(b)
+					fileToZip, err := os.Open(file)
+					if err == nil {
+						fWriter, err := zipWriter.Create(filepath.Base(file))
+						if err == nil {
+							io.Copy(fWriter, fileToZip)
+						}
+						fileToZip.Close()
+					}
 				}
 			}
 			zipWriter.Close()
