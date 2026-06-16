@@ -518,14 +518,12 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
             logger.info(
             f"Asset {asset_id} - Tentando {len(FALLBACK_GAMES)} jogos de fallback-games.txt..."
             )
-        
-        fallback_type = target_asset_type_str if target_asset_type_str != "Unknown" else "Model"
 
         for place_id in FALLBACK_GAMES:
             test_url = await fetch_asset_location(
                 session,
                 asset_id,
-                fallback_type,
+                target_asset_type_str,
                 place_id,
                 ROBLOX_COOKIE
             )
