@@ -678,18 +678,18 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
     errors = []
 
     async with aiohttp.ClientSession() as session:
-        for aid in ids_list:
-            try:
-                path, err = await download_core(session, aid)
-                if path:
-                    downloaded_files.append(path)
-                elif err:
-                    errors.append(err)
-            except Exception as e:
-                errors.append(f"Excecao severa no asset {aid}: {str(e)}")
-            
-            # Delay para evitar rate limit de múltiplas requisições ao mesmo tempo
-            await asyncio.sleep(0.5)
+        tasks = [download_core(session, aid) for aid in ids_list]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    for res in results:
+        if isinstance(res, tuple):
+            path, err = res
+            if path:
+                downloaded_files.append(path)
+            elif err:
+                errors.append(err)
+        else:
+            errors.append(f"Excecao severa: {str(res)}")
 
     if not downloaded_files:
         err_msg = "\n".join(errors)[:1800]
