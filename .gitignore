@@ -1,5 +1,6 @@
-__pycache__/
-*.pyc
 .env
 downloaded_assets/
 *.zip
+
+assetd
+*.exe
