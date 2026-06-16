@@ -35,6 +35,28 @@ logger.addHandler(ch)
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 ROBLOX_COOKIE = os.getenv("ROBLOX_COOKIE")
 
+def load_fallback_games():
+    place_ids = []
+
+    if not os.path.exists("fallback-games.txt"):
+        return place_ids
+
+    with open("fallback-games.txt", "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+
+            if not line or line.startswith("#"):
+                continue
+
+            place_id = line.split("#", 1)[0].strip()
+
+            if place_id.isdigit():
+                place_ids.append(int(place_id))
+
+    return place_ids
+
+FALLBACK_GAMES = load_fallback_games()
+
 ASSET_TYPES = {
     1: ("Image", ".png"), 2: ("TShirt", ".png"), 3: ("Audio", ".ogg"),
     4: ("Mesh", ".mesh"), 8: ("Hat", ".rbxm"), 10: ("Model", ".rbxm"),
@@ -492,17 +514,25 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
         logger.info(f"Asset {asset_id} - Tentando bypass de historico de versoes (forçado)...")
         asset_url = await fetch_version_fallback(session, asset_id, ROBLOX_COOKIE)
 
-    if not asset_url:
-        logger.info(f"Asset {asset_id} - Tentando Place ID de fallback fixo (9391468976)...")
-        asset_url = await fetch_asset_location(session, asset_id, target_asset_type_str, 9391468976, ROBLOX_COOKIE)
+    if not asset_url and FALLBACK_GAMES:
+        logger.info(
+        f"Asset {asset_id} - Tentando {len(FALLBACK_GAMES)} jogos de fallback-games.txt..."
+        )
+
+    for place_id in FALLBACK_GAMES:
+        asset_url = await fetch_asset_location(
+            session,
+            asset_id,
+            target_asset_type_str,
+            place_id,
+            ROBLOX_COOKIE
+        )
+
         if asset_url:
-            logger.info(f"Asset {asset_id} - URL obtida via Place ID fixo.")
-            
-    if not asset_url:
-        logger.info(f"Asset {asset_id} - Tentando Place ID de fallback fixo (2592032536)...")
-        asset_url = await fetch_asset_location(session, asset_id, target_asset_type_str, 2592032536, ROBLOX_COOKIE)
-        if asset_url:
-            logger.info(f"Asset {asset_id} - URL obtida via Place ID fixo.")
+            logger.info(
+                f"Asset {asset_id} - URL obtida via fallback-games.txt (PlaceID: {place_id})"
+            )
+            break
 
     if not asset_url:
         msg = f"Asset {asset_id} - URL de download inacessivel. O item provavelmente foi excluido permanentemente e não possui versões salvas."
