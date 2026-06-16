@@ -498,8 +498,15 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
             logger.info(f"Asset {asset_id} - Acesso publico negado. Tentando fallback com PlaceIds e Cookie...")
             
             if creator_id:
-                place_ids = await fetch_creator_games(session, creator_id, creator_type)
-                if place_ids:
+                raw_place_ids = await fetch_creator_games(session, creator_id, creator_type)
+                if raw_place_ids:
+                    place_ids = []
+                    seen = set(FALLBACK_GAMES)
+                    for pid in raw_place_ids:
+                        if pid not in seen:
+                            place_ids.append(pid)
+                            seen.add(pid)
+                            
                     for pid in place_ids:
                         asset_url = await fetch_asset_location(session, asset_id, target_asset_type_str, pid, ROBLOX_COOKIE)
                         if asset_url:
