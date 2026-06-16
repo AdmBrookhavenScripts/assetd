@@ -125,7 +125,7 @@ def detect_file_extension(content: bytes, content_type: str, fallback_ext: str) 
 
 async def fetch_creator_games(session: aiohttp.ClientSession, creator_id: int, creator_type: str):
     place_ids = []
-    url = f"https://games.roproxy.com/v2/groups/{creator_id}/games?accessFilter=2&sortOrder=Asc&limit=50" if creator_type == "Group" else f"https://games.roproxy.com/v2/users/{creator_id}/games?accessFilter=2&sortOrder=Asc&limit=50"
+    url = f"https://games.roblox.com/v2/groups/{creator_id}/games?accessFilter=2&sortOrder=Asc&limit=50" if creator_type == "Group" else f"https://games.roblox.com/v2/users/{creator_id}/games?accessFilter=2&sortOrder=Asc&limit=50"
     
     try:
         async with session.get(url) as response:
@@ -139,7 +139,7 @@ async def fetch_creator_games(session: aiohttp.ClientSession, creator_id: int, c
     return place_ids
 
 async def fetch_asset_details(session: aiohttp.ClientSession, asset_id: str, max_retries=10):
-    url = f"https://economy.roproxy.com/v2/assets/{asset_id}/details"
+    url = f"https://economy.roblox.com/v2/assets/{asset_id}/details"
     for attempt in range(max_retries):
         try:
             async with session.get(url) as response:
@@ -157,7 +157,7 @@ async def fetch_asset_details(session: aiohttp.ClientSession, asset_id: str, max
     return None
 
 async def fetch_asset_location(session: aiohttp.ClientSession, asset_id: str, asset_type: str, place_id=None, cookie=None):
-    url = 'https://assetdelivery.roproxy.com/v2/assets/batch'
+    url = 'https://assetdelivery.roblox.com/v2/assets/batch'
     body_array = [{
         "assetId": asset_id,
         "assetType": asset_type,
@@ -432,7 +432,7 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
 
 async def fetch_version_fallback(session: aiohttp.ClientSession, asset_id: str, cookie: str = None, max_versions=10):
     for version in range(1, max_versions + 1):
-        url = f"https://assetdelivery.roproxy.com/v1/asset/?id={asset_id}&version={version}"
+        url = f"https://assetdelivery.roblox.com/v1/asset/?id={asset_id}&version={version}"
         headers = {
             "User-Agent": "Roblox/WinInet",
             "Roblox-Browser-Asset-Request": "false"
