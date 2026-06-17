@@ -653,27 +653,13 @@ client = RobloxAssetBot()
 
 @client.tree.command(name="asset", description="Baixa um unico asset do Roblox de forma segura")
 async def asset(interaction: discord.Interaction, asset_id: str):
-    await interaction.response.send_message("Processando...\n🟩")
-    
-    async def progress_task():
-        try:
-            i = 1
-            while i < 10:
-                await asyncio.sleep(1)
-                i += 1
-                await interaction.edit_original_response(content=f"Processando...\n{'🟩' * i}")
-        except asyncio.CancelledError:
-            pass
-
-    ptask = asyncio.create_task(progress_task())
-    
     clean_id = asset_id.strip()
+    await interaction.response.send_message("**Processando...**\n**Assets: 0/1**\n")
     
     async with aiohttp.ClientSession() as session:
         file_path, error = await download_core(session, clean_id)
         
-    ptask.cancel()
-    await interaction.edit_original_response(content="Processando...\n🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩")
+    await interaction.edit_original_response(content="**Processando...**\n**Assets: 1/1**\n🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩")
         
     if file_path and os.path.exists(file_path):
         has_a = file_path.endswith('.ogg')
@@ -712,26 +698,14 @@ async def asset(interaction: discord.Interaction, asset_id: str):
 
 @client.tree.command(name="assetbatch", description="Baixa multiplos assets e retorna um arquivo ZIP limpo")
 async def assetbatch(interaction: discord.Interaction, asset_ids: str):
-    await interaction.response.send_message("Processando...\n🟩")
-    
-    async def progress_task():
-        try:
-            i = 1
-            while i < 10:
-                await asyncio.sleep(1.5)
-                i += 1
-                await interaction.edit_original_response(content=f"Processando...\n{'🟩' * i}")
-        except asyncio.CancelledError:
-            pass
-
-    ptask = asyncio.create_task(progress_task())
-    
-    ids_list = [x.strip() for x in asset_ids.split(',') if x.strip()]
+    raw_ids = [x.strip() for x in asset_ids.split(',') if x.strip()]
+    ids_list = list(dict.fromkeys(raw_ids))
     
     if len(ids_list) > 20:
-        ptask.cancel()
-        await interaction.edit_original_response(content="Por favor, limite a 20 assets por lote para evitar sobrecarga.")
+        await interaction.response.send_message("Por favor, limite a 20 assets por lote para evitar sobrecarga.")
         return
+
+    await interaction.response.send_message(f"**Processando...**\n**Assets: 0/{len(ids_list)}**\n")
 
     downloaded_files = []
     errors = []
@@ -739,29 +713,30 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
 
     async with aiohttp.ClientSession() as session:
         results = []
-        for aid in ids_list:
+        total = len(ids_list)
+        for idx, aid in enumerate(ids_list, 1):
             try:
                 res = await download_core(session, aid)
                 results.append(res)
             except Exception as e:
                 results.append(e)
+            
+            bar_len = int((idx / total) * 10)
+            bar = '🟩' * bar_len
+            await interaction.edit_original_response(content=f"**Processando...**\n**Assets: {idx}/{total}**\n{bar}")
 
     for aid, res in zip(ids_list, results):
         if isinstance(res, tuple):
             path, err = res
-
             if path:
                 downloaded_files.append(path)
+            else:
+                failed_ids.append(aid)
+                if err:
+                    errors.append(err)
         else:
             failed_ids.append(aid)
-            if err:
-                errors.append(err)
-    else:
-        failed_ids.append(aid)
-        errors.append(f"Excecao severa: {str(res)}")
-
-    ptask.cancel()
-    await interaction.edit_original_response(content="Processando...\n🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩")
+            errors.append(f"Excecao severa: {str(res)}")
 
     if not downloaded_files:
         err_msg = "\n".join(errors)[:1800]
@@ -804,10 +779,6 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
     final_msg = f"Lote concluido: {len(downloaded_files)} arquivos processados."
     if failed_ids:
         final_msg += f"\nFalhas ({len(failed_ids)}): "
-
-    if len(failed_ids) == 1:
-        final_msg += failed_ids[0]
-    else:
         final_msg += ", ".join(f"`{i}`" for i in failed_ids)
 
     if os.path.exists(zip_filename):
