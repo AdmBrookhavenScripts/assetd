@@ -57,24 +57,6 @@ def load_fallback_games():
 
 FALLBACK_GAMES = load_fallback_games()
 
-ASSET_TYPES = {
-    1: ("Image", ".png"), 2: ("TShirt", ".png"), 3: ("Audio", ".ogg"),
-    4: ("Mesh", ".mesh"), 8: ("Hat", ".rbxm"), 10: ("Model", ".rbxm"),
-    11: ("Shirt", ".png"), 12: ("Pants", ".png"), 13: ("Decal", ".png"),
-    17: ("Head", ".rbxm"), 18: ("Face", ".png"), 19: ("Gear", ".rbxm"),
-    21: ("Badge", ".png"), 24: ("Animation", ".rbxm"), 27: ("Torso", ".rbxm"),
-    28: ("RightArm", ".rbxm"), 29: ("LeftArm", ".rbxm"), 32: ("Package", ".rbxm"),
-    34: ("GamePass", ".png"), 38: ("Plugin", ".rbxm"), 40: ("MeshPart", ".mesh"),
-    41: ("HairAccessory", ".rbxm"), 42: ("FaceAccessory", ".rbxm"), 43: ("NeckAccessory", ".rbxm"),
-    44: ("ShoulderAccessory", ".rbxm"), 45: ("FrontAccessory", ".rbxm"), 46: ("BackAccessory", ".rbxm"),
-    47: ("WaistAccessory", ".rbxm"), 57: ("EarAccessory", ".rbxm"), 58: ("EyeAccessory", ".rbxm"),
-    61: ("EmoteAnimation", ".rbxm"), 62: ("Video", ".webm"), 64: ("TShirtAccessory", ".rbxm"),
-    65: ("ShirtAccessory", ".rbxm"), 66: ("PantsAccessory", ".rbxm"), 67: ("JacketAccessory", ".rbxm"),
-    68: ("SweaterAccessory", ".rbxm"), 69: ("ShortsAccessory", ".rbxm"), 70: ("DressSkirtAccessory", ".rbxm"),
-    73: ("FontFamily", ".json"), 76: ("EyebrowAccessory", ".rbxm"), 77: ("EyelashAccessory", ".rbxm"),
-    79: ("DynamicHead", ".rbxm")
-}
-
 NO_BINARY_TYPES = [21, 34]
 
 async def upload_litterbox(file_path: str, expire="72h"):
@@ -156,11 +138,10 @@ async def fetch_asset_details(session: aiohttp.ClientSession, asset_id: str, max
             await asyncio.sleep(0.5)
     return None
 
-async def fetch_asset_location(session: aiohttp.ClientSession, asset_id: str, asset_type: str, place_id=None, cookie=None):
+async def fetch_asset_location(session: aiohttp.ClientSession, asset_id: str, place_id=None, cookie=None):
     url = 'https://assetdelivery.roproxy.com/v2/assets/batch'
     body_array = [{
         "assetId": asset_id,
-        "assetType": asset_type,
         "requestId": "0"
     }]
     
@@ -462,8 +443,6 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
     asset_type_id = None
     creator_id = None
     creator_type = None
-    target_asset_type_str = "Unknown"
-    expected_extension = ".bin"
 
     if details and "errors" not in details:
         asset_name = details.get("Name", str(asset_id))
@@ -471,18 +450,14 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
         creator = details.get("Creator", {})
         creator_id = creator.get("CreatorTargetId")
         creator_type = creator.get("CreatorType")
-        
-        type_info = ASSET_TYPES.get(asset_type_id, ("Model", ".bin"))
-        target_asset_type_str = type_info[0]
-        expected_extension = type_info[1]
     else:
         logger.warning(f"Asset {asset_id} - Detalhes negados (provavelmente moderado). Forcando bypass direto...")
 
     sanitized_name = sanitize_filename(asset_name)
-    logger.info(f"Processando Asset {asset_id} | Nome: {sanitized_name} | TypeID: {asset_type_id} ({target_asset_type_str})")
+    logger.info(f"Processando Asset {asset_id} | Nome: {sanitized_name} | TypeID: {asset_type_id}")
 
     if asset_type_id in NO_BINARY_TYPES:
-        msg = f"Asset {asset_id} e do tipo sem arquivo binario ({target_asset_type_str})."
+        msg = f"Asset {asset_id} e do tipo sem arquivo binario."
         logger.warning(msg)
         return None, msg
 
@@ -490,7 +465,7 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
 
     if asset_type_id:
         logger.info(f"Asset {asset_id} - Tentando obter URL de forma publica...")
-        asset_url = await fetch_asset_location(session, asset_id, target_asset_type_str)
+        asset_url = await fetch_asset_location(session, asset_id)
         
         if asset_url:
             logger.info(f"Asset {asset_id} - URL publica obtida com sucesso!")
@@ -501,7 +476,7 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
                 place_ids = await fetch_creator_games(session, creator_id, creator_type)
                 if place_ids:
                     for pid in place_ids:
-                        asset_url = await fetch_asset_location(session, asset_id, target_asset_type_str, pid, ROBLOX_COOKIE)
+                        asset_url = await fetch_asset_location(session, asset_id, pid, ROBLOX_COOKIE)
                         if asset_url:
                             logger.info(f"Asset {asset_id} - URL obtida via fallback (PlaceID: {pid}).")
                             break
@@ -523,7 +498,6 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
             test_url = await fetch_asset_location(
                 session,
                 asset_id,
-                target_asset_type_str,
                 place_id,
                 ROBLOX_COOKIE
             )
@@ -562,7 +536,7 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
                 logger.error(msg)
                 return None, msg
 
-            final_ext = detect_file_extension(content, content_type, expected_extension)
+            final_ext = detect_file_extension(content, content_type, '.bin')
 
             logger.info(f"Content-Type: {content_type}")
             logger.info(f"Extensão detectada: {final_ext}")
@@ -653,13 +627,27 @@ client = RobloxAssetBot()
 
 @client.tree.command(name="asset", description="Baixa um unico asset do Roblox de forma segura")
 async def asset(interaction: discord.Interaction, asset_id: str):
+    await interaction.response.send_message("Processando...\n🟩")
+    
+    async def progress_task():
+        try:
+            i = 1
+            while i < 10:
+                await asyncio.sleep(1)
+                i += 1
+                await interaction.edit_original_response(content=f"Processando...\n{'🟩' * i}")
+        except asyncio.CancelledError:
+            pass
+
+    ptask = asyncio.create_task(progress_task())
+    
     clean_id = asset_id.strip()
-    await interaction.response.send_message("**Processando...**\n**Assets: 0/1**\n")
     
     async with aiohttp.ClientSession() as session:
         file_path, error = await download_core(session, clean_id)
         
-    await interaction.edit_original_response(content="**Processando...**\n**Assets: 1/1**\n🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩")
+    ptask.cancel()
+    await interaction.edit_original_response(content="Processando...\n🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩")
         
     if file_path and os.path.exists(file_path):
         has_a = file_path.endswith('.ogg')
@@ -698,14 +686,26 @@ async def asset(interaction: discord.Interaction, asset_id: str):
 
 @client.tree.command(name="assetbatch", description="Baixa multiplos assets e retorna um arquivo ZIP limpo")
 async def assetbatch(interaction: discord.Interaction, asset_ids: str):
-    raw_ids = [x.strip() for x in asset_ids.split(',') if x.strip()]
-    ids_list = list(dict.fromkeys(raw_ids))
+    await interaction.response.send_message("Processando...\n🟩")
+    
+    async def progress_task():
+        try:
+            i = 1
+            while i < 10:
+                await asyncio.sleep(1.5)
+                i += 1
+                await interaction.edit_original_response(content=f"Processando...\n{'🟩' * i}")
+        except asyncio.CancelledError:
+            pass
+
+    ptask = asyncio.create_task(progress_task())
+    
+    ids_list = [x.strip() for x in asset_ids.split(',') if x.strip()]
     
     if len(ids_list) > 20:
-        await interaction.response.send_message("Por favor, limite a 20 assets por lote para evitar sobrecarga.")
+        ptask.cancel()
+        await interaction.edit_original_response(content="Por favor, limite a 20 assets por lote para evitar sobrecarga.")
         return
-
-    await interaction.response.send_message(f"**Processando...**\n**Assets: 0/{len(ids_list)}**\n")
 
     downloaded_files = []
     errors = []
@@ -713,30 +713,29 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
 
     async with aiohttp.ClientSession() as session:
         results = []
-        total = len(ids_list)
-        for idx, aid in enumerate(ids_list, 1):
+        for aid in ids_list:
             try:
                 res = await download_core(session, aid)
                 results.append(res)
             except Exception as e:
                 results.append(e)
-            
-            bar_len = int((idx / total) * 10)
-            bar = '🟩' * bar_len
-            await interaction.edit_original_response(content=f"**Processando...**\n**Assets: {idx}/{total}**\n{bar}")
 
     for aid, res in zip(ids_list, results):
         if isinstance(res, tuple):
             path, err = res
+
             if path:
                 downloaded_files.append(path)
-            else:
-                failed_ids.append(aid)
-                if err:
-                    errors.append(err)
         else:
             failed_ids.append(aid)
-            errors.append(f"Excecao severa: {str(res)}")
+            if err:
+                errors.append(err)
+    else:
+        failed_ids.append(aid)
+        errors.append(f"Excecao severa: {str(res)}")
+
+    ptask.cancel()
+    await interaction.edit_original_response(content="Processando...\n🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩")
 
     if not downloaded_files:
         err_msg = "\n".join(errors)[:1800]
@@ -779,7 +778,11 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
     final_msg = f"Lote concluido: {len(downloaded_files)} arquivos processados."
     if failed_ids:
         final_msg += f"\nFalhas ({len(failed_ids)}): "
-        final_msg += ", ".join(f"`{i}`" for i in failed_ids)
+
+        if len(failed_ids) == 1:
+            final_msg += failed_ids[0]
+        else:
+            final_msg += ", ".join(f"`{i}`" for i in failed_ids)
 
     if os.path.exists(zip_filename):
         if os.path.getsize(zip_filename) > 10 * 1024 * 1024:
