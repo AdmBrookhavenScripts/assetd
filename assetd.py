@@ -173,34 +173,44 @@ def sanitize_filename(name: str) -> str:
     sanitized = re.sub(r'[\\/*?"<>|]', '', name)
     return sanitized.replace(" ", "_")
 
-async def convert_media(input_path: str, format: str) -> str:
-    if not format or input_path.endswith(format):
+async def convert_media(input_path: str, format: str, quality: str) -> str:
+    if not format or (input_path.endswith(format) and quality == 'original'):
         return input_path
 
     input_dir = os.path.dirname(input_path) or '.'
     input_name = os.path.basename(input_path)
-    output_name = input_name.rsplit('.', 1)[0] + format
-    output_path = os.path.join(input_dir, output_name)
+    temp_output_name = input_name.rsplit('.', 1)[0] + "_mod" + format
+    temp_output_path = os.path.join(input_dir, temp_output_name)
 
-    if format == '.mp3':
-        cmd = [
-            'ffmpeg', '-y', '-i', input_name,
-            '-c:a', 'libmp3lame', '-q:a', '2',
-            output_name
-        ]
-    elif format == '.wav':
-        cmd = [
-            'ffmpeg', '-y', '-i', input_name,
-            '-c:a', 'pcm_s16le',
-            output_name
-        ]
-    elif format in ['.mp4', '.mov']:
-        cmd = [
-            'ffmpeg', '-y', '-i', input_name,
-            output_name
-        ]
+    cmd = ['ffmpeg', '-y', '-i', input_name]
+
+    is_audio = format in ['.mp3', '.wav', '.ogg']
+    if is_audio:
+        if format == '.mp3':
+            cmd.extend(['-c:a', 'libmp3lame'])
+        elif format == '.wav':
+            cmd.extend(['-c:a', 'pcm_s16le'])
+        elif format == '.ogg':
+            cmd.extend(['-c:a', 'libvorbis'])
+
+        if quality == 'high':
+            cmd.extend(['-b:a', '320k'])
+        elif quality == 'medium':
+            cmd.extend(['-b:a', '192k'])
+        elif quality == 'low':
+            cmd.extend(['-b:a', '128k'])
+        elif quality == 'original' and format == '.mp3':
+            cmd.extend(['-q:a', '2'])
     else:
-        return input_path
+        if format in ['.mp4', '.mov', '.webm']:
+            if quality == '1080p':
+                cmd.extend(['-vf', 'scale=-2:1080'])
+            elif quality == '720p':
+                cmd.extend(['-vf', 'scale=-2:720'])
+            elif quality == '480p':
+                cmd.extend(['-vf', 'scale=-2:480'])
+
+    cmd.append(temp_output_name)
 
     try:
         process = await asyncio.create_subprocess_exec(
@@ -223,13 +233,14 @@ async def convert_media(input_path: str, format: str) -> str:
         if process.returncode != 0:
             return input_path
 
-        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+        if os.path.exists(temp_output_path) and os.path.getsize(temp_output_path) > 0:
             try:
                 os.remove(input_path)
+                final_output_path = os.path.join(input_dir, input_name.rsplit('.', 1)[0] + format)
+                os.rename(temp_output_path, final_output_path)
+                return final_output_path
             except Exception:
-                pass
-
-            return output_path
+                return temp_output_path
 
     except Exception as e:
         logger.error(f"Erro no FFmpeg: {e}")
@@ -582,6 +593,34 @@ class FormatButton(discord.ui.Button):
                 
         await interaction.response.edit_message(view=self.view)
 
+class QualitySelect(discord.ui.Select):
+    def __init__(self, is_audio: bool, row: int):
+        self.is_audio = is_audio
+        if is_audio:
+            options = [
+                discord.SelectOption(label="Original", value="original", description="Qualidade original"),
+                discord.SelectOption(label="Alta", value="high", description="320kbps"),
+                discord.SelectOption(label="Média", value="medium", description="192kbps"),
+                discord.SelectOption(label="Baixa", value="low", description="128kbps"),
+            ]
+            placeholder = "Selecione a Qualidade de Áudio"
+        else:
+            options = [
+                discord.SelectOption(label="Original", value="original", description="Resolução original"),
+                discord.SelectOption(label="1080p", value="1080p"),
+                discord.SelectOption(label="720p", value="720p"),
+                discord.SelectOption(label="480p", value="480p"),
+            ]
+            placeholder = "Selecione a Qualidade de Vídeo"
+        super().__init__(placeholder=placeholder, min_values=1, max_values=1, options=options, row=row)
+
+    async def callback(self, interaction: discord.Interaction):
+        if self.is_audio:
+            self.view.audio_quality = self.values[0]
+        else:
+            self.view.video_quality = self.values[0]
+        await interaction.response.defer()
+
 class ConfirmButton(discord.ui.Button):
     def __init__(self, row: int):
         super().__init__(label="Confirmar e Processar", style=discord.ButtonStyle.success, row=row)
@@ -598,6 +637,8 @@ class MediaFormatView(discord.ui.View):
         super().__init__(timeout=120)
         self.audio_fmt = '.ogg'
         self.video_fmt = '.webm'
+        self.audio_quality = 'original'
+        self.video_quality = 'original'
         self.confirmed = False
         
         row_idx = 0
@@ -611,6 +652,14 @@ class MediaFormatView(discord.ui.View):
             self.add_item(FormatButton("MP4", ".mp4", row=row_idx, is_audio=False))
             self.add_item(FormatButton("MOV", ".mov", row=row_idx, is_audio=False))
             self.add_item(FormatButton("WEBM (Original)", ".webm", row=row_idx, is_audio=False, style=discord.ButtonStyle.primary))
+            row_idx += 1
+
+        if has_audio:
+            self.add_item(QualitySelect(is_audio=True, row=row_idx))
+            row_idx += 1
+
+        if has_video:
+            self.add_item(QualitySelect(is_audio=False, row=row_idx))
             row_idx += 1
             
         self.add_item(ConfirmButton(row=row_idx))
@@ -655,12 +704,13 @@ async def asset(interaction: discord.Interaction, asset_id: str):
         
         if has_a or has_v:
             view = MediaFormatView(has_a, has_v)
-            await interaction.edit_original_response(content="Mídia detectada! Selecione o formato desejado:", view=view)
+            await interaction.edit_original_response(content="Mídia detectada! Selecione os formatos e qualidades:", view=view)
             await view.wait()
             
             if view.confirmed:
                 fmt = view.audio_fmt if has_a else view.video_fmt
-                file_path = await convert_media(file_path, fmt)
+                qual = view.audio_quality if has_a else view.video_quality
+                file_path = await convert_media(file_path, fmt, qual)
             
             if os.path.getsize(file_path) > 10 * 1024 * 1024:
                 await interaction.edit_original_response(content="O arquivo convertido excede o limite de 10MB do Discord. Enviando para o Litterbox...", view=None)
@@ -747,16 +797,16 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
 
     if has_a or has_v:
         view = MediaFormatView(has_a, has_v)
-        await interaction.edit_original_response(content="Mídias detectadas no lote! Selecione os formatos:", view=view)
+        await interaction.edit_original_response(content="Mídias detectadas no lote! Selecione os formatos e qualidades:", view=view)
         await view.wait()
         
         if view.confirmed:
             new_files = []
             for f in downloaded_files:
                 if f.endswith('.ogg'):
-                    f = await convert_media(f, view.audio_fmt)
+                    f = await convert_media(f, view.audio_fmt, view.audio_quality)
                 elif f.endswith('.webm'):
-                    f = await convert_media(f, view.video_fmt)
+                    f = await convert_media(f, view.video_fmt, view.video_quality)
                 new_files.append(f)
             downloaded_files = new_files
             await interaction.edit_original_response(content="Criando ZIP...", view=None)
