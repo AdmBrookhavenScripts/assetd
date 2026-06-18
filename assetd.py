@@ -118,14 +118,12 @@ def detect_file_extension(content: bytes, content_type: str, fallback_ext: str) 
     
     return fallback_ext
 
-async def fetch_creator_games(session: aiohttp.ClientSession, creator_id: int, creator_type: str, cookie=None):
+async def fetch_creator_games(session: aiohttp.ClientSession, creator_id: int, creator_type: str):
     place_ids = []
-    url = f"https://games.roblox.com/v2/groups/{creator_id}/games?accessFilter=2&sortOrder=Asc&limit=50" if creator_type == "Group" else f"https://games.roblox.com/v2/users/{creator_id}/games?accessFilter=2&sortOrder=Asc&limit=50"
-    headers = {}
-    if cookie:
-        headers["Cookie"] = f".ROBLOSECURITY={cookie}"
+    url = f"https://games.roproxy.com/v2/groups/{creator_id}/games?accessFilter=2&sortOrder=Asc&limit=50" if creator_type == "Group" else f"https://games.roproxy.com/v2/users/{creator_id}/games?accessFilter=2&sortOrder=Asc&limit=50"
+    
     try:
-        async with session.get(url, headers=headers) as response:
+        async with session.get(url) as response:
             if response.status == 200:
                 data = await response.json()
                 for game in data.get("data", []):
@@ -135,14 +133,11 @@ async def fetch_creator_games(session: aiohttp.ClientSession, creator_id: int, c
         logger.warning(f"Falha ao buscar experiencias do criador {creator_id}: {e}")
     return place_ids
 
-async def fetch_asset_details(session: aiohttp.ClientSession, asset_id: str, cookie=None, max_retries=10):
-    url = f"https://economy.roblox.com/v2/assets/{asset_id}/details"
-    headers = {}
-    if cookie:
-        headers["Cookie"] = f".ROBLOSECURITY={cookie}"
+async def fetch_asset_details(session: aiohttp.ClientSession, asset_id: str, max_retries=10):
+    url = f"https://economy.roproxy.com/v2/assets/{asset_id}/details"
     for attempt in range(max_retries):
         try:
-            async with session.get(url, headers=headers) as response:
+            async with session.get(url) as response:
                 if response.status == 200:
                     return await response.json()
                 elif response.status in [400, 403]:
@@ -190,10 +185,6 @@ async def fetch_asset_location(session: aiohttp.ClientSession, asset_id: str, as
     except Exception as e:
         logger.debug(f"Erro ao buscar localizacao do asset {asset_id} (Place: {place_id}): {e}")
     return None
-
-def sanitize_filename(name: str) -> str:
-    sanitized = re.sub(r'[\\/*?"<>|]', '', name)
-    return sanitized.replace(" ", "_")
 
 async def convert_media(input_path: str, format: str) -> str:
     if not format or input_path.endswith(format):
@@ -463,8 +454,12 @@ async def fetch_version_fallback(session: aiohttp.ClientSession, asset_id: str, 
         
     return None
 
+def sanitize_filename(name: str) -> str:
+    sanitized = re.sub(r'[\\/*?"<>|]', '', name)
+    return sanitized.replace(" ", "_")
+
 async def download_core(session: aiohttp.ClientSession, asset_id: str):
-    details = await fetch_asset_details(session, asset_id, ROBLOX_COOKIE)
+    details = await fetch_asset_details(session, asset_id)
     
     asset_name = str(asset_id)
     asset_type_id = None
@@ -501,7 +496,7 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
             logger.info(f"Asset {asset_id} - Acesso publico negado. Tentando fallback com PlaceIds e Cookie...")
             
             if creator_id:
-                place_ids = await fetch_creator_games(session, creator_id, creator_type, ROBLOX_COOKIE)
+                place_ids = await fetch_creator_games(session, creator_id, creator_type)
                 if place_ids:
                     for pid in place_ids:
                         asset_url = await fetch_asset_location(session, asset_id, asset_type_str, pid, ROBLOX_COOKIE)
