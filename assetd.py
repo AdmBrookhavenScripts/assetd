@@ -7,7 +7,6 @@ import os
 import zipfile
 import uuid
 import logging
-import json
 from urllib.parse import urljoin, urlparse, urlunparse
 from colorama import init, Fore, Style
 
@@ -36,29 +35,24 @@ logger.addHandler(ch)
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 ROBLOX_COOKIE = os.getenv("ROBLOX_COOKIE")
 
-ASSET_TYPE_MAP = {
-    1: "Image", 2: "TeeShirt", 3: "Audio", 4: "Mesh", 5: "Lua", 8: "Hat", 9: "Place",
-    10: "Model", 11: "Shirt", 12: "Pants", 13: "Decal", 16: "Avatar", 17: "Head", 
-    18: "Face", 19: "Gear", 21: "Badge", 24: "Animation", 27: "Torso", 28: "RightArm", 
-    29: "LeftArm", 30: "LeftLeg", 31: "RightLeg", 32: "Package", 34: "GamePass", 
-    38: "Plugin", 39: "SolidModel", 40: "MeshPart", 47: "HairAccessory", 
-    48: "FaceAccessory", 49: "NeckAccessory", 50: "ShoulderAccessory", 
-    51: "FrontAccessory", 52: "BackAccessory", 53: "WaistAccessory", 
-    61: "EmoteAnimation", 62: "Video", 73: "AudioAccessory"
-}
-
 def load_fallback_games():
     place_ids = []
+
     if not os.path.exists("fallback-games.txt"):
         return place_ids
+
     with open("fallback-games.txt", "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
+
             if not line or line.startswith("#"):
                 continue
+
             place_id = line.split("#", 1)[0].strip()
+
             if place_id.isdigit():
                 place_ids.append(int(place_id))
+
     return place_ids
 
 FALLBACK_GAMES = load_fallback_games()
@@ -76,9 +70,6 @@ async def upload_litterbox(file_path: str, expire="72h"):
                 data.add_field('fileToUpload', f, filename=os.path.basename(file_path))
                 
                 async with session.post(url, data=data) as response:
-                    text = await response.text()
-                    logger.info(f"Status: {response.status}")
-                    logger.info(f"Resposta: {text}")
                     if response.status == 200:
                         return await response.text()
                     else:
@@ -87,14 +78,22 @@ async def upload_litterbox(file_path: str, expire="72h"):
         return f"Erro: {str(e)}"
 
 def detect_file_extension(content: bytes, content_type: str, fallback_ext: str) -> str:
-    if content.startswith(b'#EXTM3U'): return '.m3u8'
-    if content.startswith(b'\x89PNG\r\n\x1a\n'): return '.png'
-    if content.startswith(b'OggS'): return '.ogg'
-    if content.startswith(b'\x1aE\xdf\xa3'): return '.webm'
-    if content.startswith(b'<roblox!'): return '.rbxm'
-    if content.startswith(b'<roblox'): return '.rbxmx'
-    if content.startswith(b'version '): return '.mesh'
-    if content.startswith(b'{"') or content.startswith(b'['): return '.json'
+    if content.startswith(b'#EXTM3U'):
+        return '.m3u8'
+    if content.startswith(b'\x89PNG\r\n\x1a\n'):
+        return '.png'
+    if content.startswith(b'OggS'):
+        return '.ogg'
+    if content.startswith(b'\x1aE\xdf\xa3'):
+        return '.webm'
+    if content.startswith(b'<roblox!'):
+        return '.rbxm'
+    if content.startswith(b'<roblox'):
+        return '.rbxmx'
+    if content.startswith(b'version '):
+        return '.mesh'
+    if content.startswith(b'{"') or content.startswith(b'['):
+        return '.json'
     
     ctype = content_type.lower()
     if 'image/png' in ctype: return '.png'
@@ -112,8 +111,6 @@ async def fetch_creator_games(session: aiohttp.ClientSession, creator_id: int, c
     
     try:
         async with session.get(url) as response:
-            logger.info(f"Download Status: {response.status}")
-            logger.info(f"Content-Type: {response.headers.get('Content-Type')}")
             if response.status == 200:
                 data = await response.json()
                 for game in data.get("data", []):
@@ -141,18 +138,12 @@ async def fetch_asset_details(session: aiohttp.ClientSession, asset_id: str, max
             await asyncio.sleep(0.5)
     return None
 
-async def fetch_asset_location(session: aiohttp.ClientSession, asset_id: str, place_id=None, cookie=None, asset_type_str=None):
+async def fetch_asset_location(session: aiohttp.ClientSession, asset_id: str, place_id=None, cookie=None, max_retries=5):
     url = 'https://assetdelivery.roblox.com/v2/assets/batch'
-    
-    body_obj = {
-        "assetId": int(asset_id), 
+    body_array = [{
+        "assetId": asset_id,
         "requestId": "0"
-    }
-    
-    if asset_type_str:
-        body_obj["assetType"] = asset_type_str
-
-    body_array = [body_obj]
+    }]
     
     headers = {
         "User-Agent": "Roblox/WinInet",
@@ -166,32 +157,24 @@ async def fetch_asset_location(session: aiohttp.ClientSession, asset_id: str, pl
     if place_id:
         headers["Roblox-Place-Id"] = str(place_id)
 
-    logger.debug(f"[FETCH_LOCATION] POST to {url}")
-    logger.debug(f"[FETCH_LOCATION] Headers: {headers}")
-    logger.debug(f"[FETCH_LOCATION] Payload: {json.dumps(body_array)}")
-
-    for attempt in range(3):
+    for attempt in range(max_retries):
         try:
             async with session.post(url, headers=headers, json=body_array) as response:
-                response_text = await response.text()
-                
-                logger.debug(f"[FETCH_LOCATION] Tentativa {attempt + 1} - Status HTTP: {response.status}")
-                logger.debug(f"[FETCH_LOCATION] Resposta Body: {response_text}")
-
                 if response.status == 200:
-                    try:
-                        locations = json.loads(response_text)
-                        if locations and len(locations) > 0:
-                            obj = locations[0]
-                            if obj.get("locations") and len(obj["locations"]) > 0 and obj["locations"][0].get("location"):
-                                return obj["locations"][0]["location"]
-                    except json.JSONDecodeError:
-                        logger.error(f"[FETCH_LOCATION] Resposta do servidor nao e um JSON valido.")
+                    locations = await response.json()
+                    if locations and len(locations) > 0:
+                        obj = locations[0]
+                        if obj.get("locations") and obj["locations"][0].get("location"):
+                            return obj["locations"][0]["location"]
+                    return None
+                elif response.status == 429:
+                    await asyncio.sleep(2 ** attempt)
+                    continue
+                else:
+                    break
         except Exception as e:
-            logger.debug(f"[FETCH_LOCATION] Erro na tentativa {attempt + 1} para o asset {asset_id} (Place: {place_id}): {e}")
-        
-        await asyncio.sleep(0.5)
-
+            logger.debug(f"Erro ao buscar localizacao do asset {asset_id} (Place: {place_id}): {e}")
+            await asyncio.sleep(1)
     return None
 
 def sanitize_filename(name: str) -> str:
@@ -208,11 +191,22 @@ async def convert_media(input_path: str, format: str) -> str:
     output_path = os.path.join(input_dir, output_name)
 
     if format == '.mp3':
-        cmd = ['ffmpeg', '-y', '-i', input_name, '-c:a', 'libmp3lame', '-q:a', '2', output_name]
+        cmd = [
+            'ffmpeg', '-y', '-i', input_name,
+            '-c:a', 'libmp3lame', '-q:a', '2',
+            output_name
+        ]
     elif format == '.wav':
-        cmd = ['ffmpeg', '-y', '-i', input_name, '-c:a', 'pcm_s16le', output_name]
+        cmd = [
+            'ffmpeg', '-y', '-i', input_name,
+            '-c:a', 'pcm_s16le',
+            output_name
+        ]
     elif format in ['.mp4', '.mov']:
-        cmd = ['ffmpeg', '-y', '-i', input_name, output_name]
+        cmd = [
+            'ffmpeg', '-y', '-i', input_name,
+            output_name
+        ]
     else:
         return input_path
 
@@ -223,9 +217,15 @@ async def convert_media(input_path: str, format: str) -> str:
             stderr=asyncio.subprocess.PIPE,
             cwd=os.path.abspath(input_dir)
         )
+
         stdout, stderr = await process.communicate()
-        if stdout: logger.info(stdout.decode(errors="ignore"))
-        if stderr: logger.error(stderr.decode(errors="ignore"))
+
+        if stdout:
+            logger.info(stdout.decode(errors="ignore"))
+
+        if stderr:
+            logger.error(stderr.decode(errors="ignore"))
+
         logger.info(f"FFmpeg return code: {process.returncode}")
 
         if process.returncode != 0:
@@ -236,9 +236,12 @@ async def convert_media(input_path: str, format: str) -> str:
                 os.remove(input_path)
             except Exception:
                 pass
+
             return output_path
+
     except Exception as e:
         logger.error(f"Erro no FFmpeg: {e}")
+
     return input_path
 
 async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, base_url: str) -> str:
@@ -255,21 +258,25 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
             match = re.search(r'#EXT-X-DEFINE:NAME="RBX-BASE-URI",VALUE="([^"]+)"', line)
             if match:
                 rbx_base_uri = match.group(1)
-                if not rbx_base_uri.endswith('/'): rbx_base_uri += '/'
+                if not rbx_base_uri.endswith('/'):
+                    rbx_base_uri += '/'
                 logger.info(f"RBX-BASE-URI detectado: {rbx_base_uri}")
                 break
 
         best_playlist_url = None
         streams = []
+        
         for i, line in enumerate(lines):
             if line.startswith('#EXT-X-STREAM-INF'):
                 if i + 1 < len(lines):
                     streams.append((line, lines[i+1]))
         
         logger.info(f"Quantidade de streams encontrados: {len(streams)}")
+        
         if streams:
             best_stream = None
             max_height = -1
+
             for info, url in streams:
                 res_match = re.search(r'RESOLUTION=\d+x(\d+)', info)
                 if res_match:
@@ -296,9 +303,11 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
             joined = urljoin(base_path, target_path)
             parsed_joined = urlparse(joined)
             parsed_master = urlparse(master_url)
+            
             if not urlparse(target_path).query:
                 if parsed_joined.netloc == parsed_master.netloc:
                     joined = urlunparse(parsed_joined._replace(query=parsed_master.query))
+                
             return joined
 
         headers = {
@@ -310,11 +319,19 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
             internal_m3u8_content = m3u8_content
         else:
             if "{$RBX-BASE-URI}" in best_playlist_url and rbx_base_uri:
-                best_playlist_url = best_playlist_url.replace("{$RBX-BASE-URI}", rbx_base_uri.rstrip("/"))
+                best_playlist_url = best_playlist_url.replace(
+                    "{$RBX-BASE-URI}",
+                    rbx_base_uri.rstrip("/")
+                )
             else:
-                best_playlist_url = get_url_with_auth(base_url, best_playlist_url, base_url)
+                best_playlist_url = get_url_with_auth(
+                    base_url,
+                    best_playlist_url,
+                    base_url
+                )
 
             logger.info(f"URL INTERNA = {best_playlist_url}")
+
             async with session.get(best_playlist_url, headers=headers) as resp:
                 if resp.status != 200:
                     logger.error(f"Falha ao baixar playlist interna: {resp.status}")
@@ -322,21 +339,30 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
                 internal_m3u8_content = await resp.text()
 
         segments = [line for line in internal_m3u8_content.splitlines() if line and not line.startswith('#')]
+        
         if not segments:
             logger.error("Nenhum segmento encontrado na playlist HLS.")
             return None
 
         output_dir = os.path.dirname(m3u8_path) or '.'
         base_name = os.path.basename(m3u8_path).rsplit('.', 1)[0]
+        
         segment_files = []
+        logger.info(f"Quantidade de segmentos encontrados: {len(segments)}")
         logger.info(f"Baixando {len(segments)} segmentos HLS para {base_name}...")
+        
         segments_base_path = best_playlist_url
 
         for i, seg in enumerate(segments):
             seg_url = get_url_with_auth(segments_base_path, seg, base_url)
+            
             clean_url = seg_url.split('?')[0]
             filename = clean_url.split('/')[-1]
-            ext = '.' + filename.split('.')[-1] if '.' in filename else '.webm'
+            if '.' in filename:
+                ext = '.' + filename.split('.')[-1]
+            else:
+                ext = '.webm'
+            
             seg_path = os.path.join(output_dir, f"{base_name}_seg_{i:04d}{ext}")
             
             async with session.get(seg_url, headers=headers) as resp:
@@ -363,25 +389,32 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         logger.info(f"Concatenando segmentos em {webm_name}...")
         
         cmd = ['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', list_name, '-c', 'copy', webm_name]
+        
         process = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, cwd=os.path.abspath(output_dir)
+            *cmd, 
+            stdout=asyncio.subprocess.PIPE, 
+            stderr=asyncio.subprocess.PIPE,
+            cwd=os.path.abspath(output_dir)
         )
         stdout, stderr = await process.communicate()
         
         if process.returncode != 0:
-            logger.error(f"Falha na reconstrução HLS. Código FFmpeg: {process.returncode}")
+            logger.error("Falha na reconstrução HLS.")
+            logger.error(f"Motivo: FFmpeg falhou com código de retorno {process.returncode}")
             return None
 
-        logger.info(f"Sucesso HLS: Salvo em {webm_output}")
+        logger.info(f"Resultado final da concatenação HLS: Sucesso. Salvo em {webm_output}")
 
         try:
             os.remove(m3u8_path)
             os.remove(list_path)
-            for sf in segment_files: os.remove(sf)
+            for sf in segment_files:
+                os.remove(sf)
         except Exception as e:
-            logger.warning(f"Erro ao limpar arquivos HLS: {e}")
+            logger.warning(f"Erro ao limpar arquivos temporários HLS: {e}")
 
         return webm_output
+
     except Exception as e:
         logger.error(f"Erro geral processando HLS: {e}")
         return None
@@ -389,18 +422,32 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
 async def fetch_version_fallback(session: aiohttp.ClientSession, asset_id: str, cookie: str = None, max_versions=10):
     for version in range(1, max_versions + 1):
         url = f"https://assetdelivery.roblox.com/v1/asset/?id={asset_id}&version={version}"
-        headers = {"User-Agent": "Roblox/WinInet", "Roblox-Browser-Asset-Request": "false"}
-        if cookie: headers["Cookie"] = f".ROBLOSECURITY={cookie}"
-        try:
-            async with session.get(url, headers=headers, allow_redirects=True) as response:
-                if response.status == 200:
-                    content_type = response.headers.get('Content-Type', '')
-                    if 'text/html' not in content_type.lower() and 'application/json' not in content_type.lower():
-                        logger.info(f"Asset {asset_id} - Sucesso ao recuperar a versao {version} via Fallback!")
-                        return url
-        except Exception as e:
-            logger.debug(f"Erro ao testar versao {version} do asset {asset_id}: {e}")
-        await asyncio.sleep(0.5)
+        headers = {
+            "User-Agent": "Roblox/WinInet",
+            "Roblox-Browser-Asset-Request": "false"
+        }
+        
+        if cookie:
+            headers["Cookie"] = f".ROBLOSECURITY={cookie}"
+            
+        for attempt in range(3):
+            try:
+                async with session.get(url, headers=headers, allow_redirects=True) as response:
+                    if response.status == 200:
+                        content_type = response.headers.get('Content-Type', '')
+                        if 'text/html' not in content_type.lower() and 'application/json' not in content_type.lower():
+                            logger.info(f"Asset {asset_id} - Sucesso ao recuperar a versao {version} que escapou da moderacao!")
+                            return url
+                        break
+                    elif response.status == 429:
+                        await asyncio.sleep(2 ** attempt)
+                        continue
+                    else:
+                        break
+            except Exception as e:
+                logger.debug(f"Erro ao testar versao {version} do asset {asset_id}: {e}")
+                await asyncio.sleep(1)
+                
     return None
 
 async def download_core(session: aiohttp.ClientSession, asset_id: str):
@@ -418,11 +465,10 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
         creator_id = creator.get("CreatorTargetId")
         creator_type = creator.get("CreatorType")
     else:
-        logger.warning(f"Asset {asset_id} - Detalhes negados (provavelmente moderado).")
+        logger.warning(f"Asset {asset_id} - Detalhes negados (provavelmente moderado). Forcando bypass direto...")
 
     sanitized_name = sanitize_filename(asset_name)
-    asset_type_str = ASSET_TYPE_MAP.get(asset_type_id)
-    logger.info(f"Processando Asset {asset_id} | Nome: {sanitized_name} | TypeID: {asset_type_id} ({asset_type_str})")
+    logger.info(f"Processando Asset {asset_id} | Nome: {sanitized_name} | TypeID: {asset_type_id}")
 
     if asset_type_id in NO_BINARY_TYPES:
         msg = f"Asset {asset_id} e do tipo sem arquivo binario."
@@ -433,65 +479,80 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
 
     if asset_type_id:
         logger.info(f"Asset {asset_id} - Tentando obter URL de forma publica...")
-        asset_url = await fetch_asset_location(session, asset_id, asset_type_str=asset_type_str)
+        asset_url = await fetch_asset_location(session, asset_id)
         
         if asset_url:
             logger.info(f"Asset {asset_id} - URL publica obtida com sucesso!")
         else:
-            logger.info(f"Asset {asset_id} - Acesso publico negado. Tentando fallback com PlaceIds...")
+            logger.info(f"Asset {asset_id} - Acesso publico negado. Tentando fallback com PlaceIds e Cookie...")
+            
             if creator_id:
                 place_ids = await fetch_creator_games(session, creator_id, creator_type)
                 if place_ids:
                     for pid in place_ids:
-                        asset_url = await fetch_asset_location(session, asset_id, pid, ROBLOX_COOKIE, asset_type_str)
+                        asset_url = await fetch_asset_location(session, asset_id, pid, ROBLOX_COOKIE)
                         if asset_url:
                             logger.info(f"Asset {asset_id} - URL obtida via fallback (PlaceID: {pid}).")
                             break
                 else:
                     logger.warning(f"Asset {asset_id} - Nenhuma experiencia encontrada para o criador.")
             else:
-                logger.error(f"Asset {asset_id} - Nao foi possivel obter o criador.")
+                logger.error(f"Asset {asset_id} - Nao foi possivel obter o criador do asset para o fallback.")
 
     if not asset_url:
         logger.info(f"Asset {asset_id} - Tentando bypass de historico de versoes (forçado)...")
         asset_url = await fetch_version_fallback(session, asset_id, ROBLOX_COOKIE)
 
         if not asset_url and FALLBACK_GAMES:
-            logger.info(f"Asset {asset_id} - Tentando {len(FALLBACK_GAMES)} jogos de fallback-games.txt...")
+            logger.info(
+            f"Asset {asset_id} - Tentando {len(FALLBACK_GAMES)} jogos de fallback-games.txt..."
+            )
 
         for place_id in FALLBACK_GAMES:
-            test_url = await fetch_asset_location(session, asset_id, place_id, ROBLOX_COOKIE, asset_type_str)
+            test_url = await fetch_asset_location(
+                session,
+                asset_id,
+                place_id,
+                ROBLOX_COOKIE
+            )
+
             if test_url:
                 asset_url = test_url
-                logger.info(f"Asset {asset_id} - URL obtida via fallback-games.txt (PlaceID: {place_id})")
+                logger.info(
+                    f"Asset {asset_id} - URL obtida via fallback-games.txt (PlaceID: {place_id})"
+                )
                 break
 
     if not asset_url:
-        msg = f"Asset {asset_id} - URL inacessivel. Excluido permanentemente ou restrito sem acesso."
+        msg = f"Asset {asset_id} - URL de download inacessivel. O item provavelmente foi excluido permanentemente e não possui versões salvas."
         logger.error(msg)
         return None, msg
 
     try:
-        logger.info(f"Baixando diretamente da Asset URL: {asset_url}")
+        logger.info(f"Asset URL: {asset_url}")
         async with session.get(asset_url) as response:
             if response.status != 200:
-                msg = f"Asset {asset_id} - Falha HTTP {response.status}."
+                msg = f"Asset {asset_id} - Falha no download HTTP {response.status}."
                 logger.error(msg)
                 return None, msg
 
             content_type = response.headers.get('Content-Type', '')
             if 'text/html' in content_type.lower() or 'application/json' in content_type.lower():
-                msg = f"Asset {asset_id} - Arquivo invalido retornado."
+                msg = f"Asset {asset_id} - Arquivo invalido retornado (HTML/JSON de erro)."
                 logger.error(msg)
                 return None, msg
 
             content = await response.read()
-            logger.info(f"Tamanho do arquivo: {len(content)} bytes | Content-Type: {content_type}")
-            
+
+            logger.info(f"Tamanho do arquivo: {len(content)} bytes")
             if len(content) == 0:
-                return None, f"Asset {asset_id} - Arquivo vazio retornado."
+                msg = f"Asset {asset_id} - Arquivo vazio retornado."
+                logger.error(msg)
+                return None, msg
 
             final_ext = detect_file_extension(content, content_type, '.bin')
+
+            logger.info(f"Content-Type: {content_type}")
             logger.info(f"Extensão detectada: {final_ext}")
 
             os.makedirs("downloaded_assets", exist_ok=True)
@@ -501,13 +562,15 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
                 f.write(content)
             
             if final_ext == '.m3u8':
-                logger.info(f"Asset {asset_id} - Reconstruindo HLS...")
+                logger.info(f"Asset {asset_id} - Playlist HLS detectada. Iniciando reconstrução...")
                 hls_webm_path = await process_hls_playlist(session, file_path, asset_url)
                 if not hls_webm_path:
-                    return None, f"Asset {asset_id} - Falha ao reconstruir HLS."
+                    msg = f"Asset {asset_id} - Falha ao reconstruir video HLS."
+                    logger.error(msg)
+                    return None, msg
                 file_path = hls_webm_path
                 
-            logger.info(f"Download e Processamento com sucesso: {file_path}")
+            logger.info(f"Sucesso: {file_path}")
             return file_path, None
             
     except Exception as e:
@@ -591,6 +654,7 @@ async def asset(interaction: discord.Interaction, asset_id: str):
             pass
 
     ptask = asyncio.create_task(progress_task())
+    
     clean_id = asset_id.strip()
     
     async with aiohttp.ClientSession() as session:
@@ -613,21 +677,22 @@ async def asset(interaction: discord.Interaction, asset_id: str):
                 file_path = await convert_media(file_path, fmt)
             
             if os.path.getsize(file_path) > 10 * 1024 * 1024:
-                await interaction.edit_original_response(content="O arquivo excedeu 10MB do Discord. Litterbox...", view=None)
+                await interaction.edit_original_response(content="O arquivo convertido excede o limite de 10MB do Discord. Enviando para o Litterbox...", view=None)
                 litterbox_url = await upload_litterbox(file_path)
-                await interaction.edit_original_response(content=f"Excedeu 10MB. Link Litterbox: {litterbox_url}", view=None)
+                await interaction.edit_original_response(content=f"O arquivo excedeu o limite de 10MB do Discord. Link do Litterbox: {litterbox_url}", view=None)
             else:
                 await interaction.edit_original_response(content="Concluído!", attachments=[discord.File(file_path)], view=None)
         else:
             if os.path.getsize(file_path) > 10 * 1024 * 1024:
-                await interaction.edit_original_response(content="O arquivo excede 10MB do Discord. Litterbox...")
+                await interaction.edit_original_response(content="O arquivo excede o limite de 10MB do Discord. Enviando para o Litterbox...")
                 litterbox_url = await upload_litterbox(file_path)
-                await interaction.edit_original_response(content=f"Excedeu 10MB. Link Litterbox: {litterbox_url}")
+                await interaction.edit_original_response(content=f"O arquivo excedeu o limite de 10MB do Discord. Link do Litterbox: {litterbox_url}")
             else:
                 await interaction.edit_original_response(content="Concluído!", attachments=[discord.File(file_path)])
                 
         try:
-            if os.path.exists(file_path): os.remove(file_path)
+            if os.path.exists(file_path):
+                os.remove(file_path)
         except Exception:
             pass
     else:
@@ -648,11 +713,12 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
             pass
 
     ptask = asyncio.create_task(progress_task())
+    
     ids_list = [x.strip() for x in asset_ids.split(',') if x.strip()]
     
     if len(ids_list) > 20:
         ptask.cancel()
-        await interaction.edit_original_response(content="Por favor, limite a 20 assets por lote.")
+        await interaction.edit_original_response(content="Por favor, limite a 20 assets por lote para evitar sobrecarga.")
         return
 
     downloaded_files = []
@@ -671,20 +737,23 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
     for aid, res in zip(ids_list, results):
         if isinstance(res, tuple):
             path, err = res
-            if path: downloaded_files.append(path)
-            else:
-                failed_ids.append(aid)
-                if err: errors.append(err)
+
+            if path:
+                downloaded_files.append(path)
         else:
             failed_ids.append(aid)
-            errors.append(f"Excecao severa: {str(res)}")
+            if err:
+                errors.append(err)
+    else:
+        failed_ids.append(aid)
+        errors.append(f"Excecao severa: {str(res)}")
 
     ptask.cancel()
     await interaction.edit_original_response(content="Processando...\n🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩")
 
     if not downloaded_files:
         err_msg = "\n".join(errors)[:1800]
-        await interaction.edit_original_response(content=f"Falha total no lote.\nErros:\n{err_msg}")
+        await interaction.edit_original_response(content=f"Falha total no lote. Nenhum arquivo foi salvo.\nErros:\n{err_msg}")
         return
 
     has_a = any(f.endswith('.ogg') for f in downloaded_files)
@@ -692,19 +761,21 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
 
     if has_a or has_v:
         view = MediaFormatView(has_a, has_v)
-        await interaction.edit_original_response(content="Mídias detectadas! Selecione os formatos:", view=view)
+        await interaction.edit_original_response(content="Mídias detectadas no lote! Selecione os formatos:", view=view)
         await view.wait()
         
         if view.confirmed:
             new_files = []
             for f in downloaded_files:
-                if f.endswith('.ogg'): f = await convert_media(f, view.audio_fmt)
-                elif f.endswith('.webm'): f = await convert_media(f, view.video_fmt)
+                if f.endswith('.ogg'):
+                    f = await convert_media(f, view.audio_fmt)
+                elif f.endswith('.webm'):
+                    f = await convert_media(f, view.video_fmt)
                 new_files.append(f)
             downloaded_files = new_files
             await interaction.edit_original_response(content="Criando ZIP...", view=None)
         else:
-            await interaction.edit_original_response(content="Tempo esgotado. Criando ZIP originais...", view=None)
+            await interaction.edit_original_response(content="Tempo esgotado. Mantendo os arquivos originais e criando ZIP...", view=None)
     else:
         await interaction.edit_original_response(content="Criando ZIP...")
 
@@ -718,26 +789,33 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
                     
     await asyncio.to_thread(create_zip)
 
-    final_msg = f"Lote concluido: {len(downloaded_files)} arquivos."
+    final_msg = f"Lote concluido: {len(downloaded_files)} arquivos processados."
     if failed_ids:
         final_msg += f"\nFalhas ({len(failed_ids)}): "
-        if len(failed_ids) == 1: final_msg += failed_ids[0]
-        else: final_msg += ", ".join(f"`{i}`" for i in failed_ids)
+
+        if len(failed_ids) == 1:
+            final_msg += failed_ids[0]
+        else:
+            final_msg += ", ".join(f"`{i}`" for i in failed_ids)
 
     if os.path.exists(zip_filename):
         if os.path.getsize(zip_filename) > 10 * 1024 * 1024:
-            await interaction.edit_original_response(content="ZIP final excede 10MB. Litterbox...")
+            await interaction.edit_original_response(content="O arquivo ZIP final excede o limite de 10MB do Discord. Enviando para o Litterbox...")
             litterbox_url = await upload_litterbox(zip_filename)
-            await interaction.edit_original_response(content=f"{final_msg}\n\nExcedeu 10MB. Litterbox: {litterbox_url}")
+            await interaction.edit_original_response(content=f"{final_msg}\n\nO arquivo ZIP excedeu o limite de 10MB do Discord. Link do Litterbox: {litterbox_url}")
         else:
             await interaction.edit_original_response(content=final_msg, attachments=[discord.File(zip_filename)])
             
-        try: os.remove(zip_filename)
-        except Exception: pass
+        try:
+            os.remove(zip_filename)
+        except Exception:
+            pass
 
     for file in downloaded_files:
-        try: 
-            if os.path.exists(file): os.remove(file)
-        except Exception: pass
+        try:
+            if os.path.exists(file):
+                os.remove(file)
+        except Exception:
+            pass
 
 client.run(DISCORD_TOKEN)
