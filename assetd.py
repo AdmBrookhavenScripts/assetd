@@ -138,8 +138,8 @@ async def fetch_asset_details(session: aiohttp.ClientSession, asset_id: str, max
             await asyncio.sleep(0.5)
     return None
 
-async def fetch_asset_location(session: aiohttp.ClientSession, asset_id: str, place_id=None, cookie=None, max_retries=5):
-    url = 'https://assetdelivery.roblox.com/v2/assets/batch'
+async def fetch_asset_location(session: aiohttp.ClientSession, asset_id: str, place_id=None, cookie=None):
+    url = 'https://assetdelivery.roproxy.com/v2/assets/batch'
     body_array = [{
         "assetId": asset_id,
         "requestId": "0"
@@ -157,24 +157,16 @@ async def fetch_asset_location(session: aiohttp.ClientSession, asset_id: str, pl
     if place_id:
         headers["Roblox-Place-Id"] = str(place_id)
 
-    for attempt in range(max_retries):
-        try:
-            async with session.post(url, headers=headers, json=body_array) as response:
-                if response.status == 200:
-                    locations = await response.json()
-                    if locations and len(locations) > 0:
-                        obj = locations[0]
-                        if obj.get("locations") and obj["locations"][0].get("location"):
-                            return obj["locations"][0]["location"]
-                    return None
-                elif response.status == 429:
-                    await asyncio.sleep(2 ** attempt)
-                    continue
-                else:
-                    break
-        except Exception as e:
-            logger.debug(f"Erro ao buscar localizacao do asset {asset_id} (Place: {place_id}): {e}")
-            await asyncio.sleep(1)
+    try:
+        async with session.post(url, headers=headers, json=body_array) as response:
+            if response.status == 200:
+                locations = await response.json()
+                if locations and len(locations) > 0:
+                    obj = locations[0]
+                    if obj.get("locations") and obj["locations"][0].get("location"):
+                        return obj["locations"][0]["location"]
+    except Exception as e:
+        logger.debug(f"Erro ao buscar localizacao do asset {asset_id} (Place: {place_id}): {e}")
     return None
 
 def sanitize_filename(name: str) -> str:
@@ -421,7 +413,7 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
 
 async def fetch_version_fallback(session: aiohttp.ClientSession, asset_id: str, cookie: str = None, max_versions=10):
     for version in range(1, max_versions + 1):
-        url = f"https://assetdelivery.roblox.com/v1/asset/?id={asset_id}&version={version}"
+        url = f"https://assetdelivery.roproxy.com/v1/asset/?id={asset_id}&version={version}"
         headers = {
             "User-Agent": "Roblox/WinInet",
             "Roblox-Browser-Asset-Request": "false"
@@ -430,24 +422,18 @@ async def fetch_version_fallback(session: aiohttp.ClientSession, asset_id: str, 
         if cookie:
             headers["Cookie"] = f".ROBLOSECURITY={cookie}"
             
-        for attempt in range(3):
-            try:
-                async with session.get(url, headers=headers, allow_redirects=True) as response:
-                    if response.status == 200:
-                        content_type = response.headers.get('Content-Type', '')
-                        if 'text/html' not in content_type.lower() and 'application/json' not in content_type.lower():
-                            logger.info(f"Asset {asset_id} - Sucesso ao recuperar a versao {version} que escapou da moderacao!")
-                            return url
-                        break
-                    elif response.status == 429:
-                        await asyncio.sleep(2 ** attempt)
-                        continue
-                    else:
-                        break
-            except Exception as e:
-                logger.debug(f"Erro ao testar versao {version} do asset {asset_id}: {e}")
-                await asyncio.sleep(1)
-                
+        try:
+            async with session.get(url, headers=headers, allow_redirects=True) as response:
+                if response.status == 200:
+                    content_type = response.headers.get('Content-Type', '')
+                    if 'text/html' not in content_type.lower() and 'application/json' not in content_type.lower():
+                        logger.info(f"Asset {asset_id} - Sucesso ao recuperar a versao {version} que escapou da moderacao!")
+                        return url
+        except Exception as e:
+            logger.debug(f"Erro ao testar versao {version} do asset {asset_id}: {e}")
+            
+        await asyncio.sleep(0.5)
+        
     return None
 
 async def download_core(session: aiohttp.ClientSession, asset_id: str):
