@@ -59,8 +59,8 @@ FALLBACK_GAMES = load_fallback_games()
 
 NO_BINARY_TYPES = [21, 34]
 
-async def upload_litterbox(file_path: str, expire="72h"):
-    url = "https://litterbox.catbox.moe/resources/internals/api.php"
+async def upload_catbox(file_path: str, expire="72h"):
+    url = "https://catbox.moe/user/api.php"
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=300)) as session:
             with open(file_path, 'rb') as f:
@@ -754,16 +754,16 @@ async def asset(interaction: discord.Interaction, asset_id: str):
                 file_path = await convert_media(file_path, fmt, qual)
             
             if os.path.getsize(file_path) > 10 * 1024 * 1024:
-                await interaction.edit_original_response(content=None, embed=discord.Embed(description="O arquivo convertido excede o limite de 10MB do Discord. Enviando para o Litterbox...", color=0x335fff), view=None)
-                litterbox_url = await upload_litterbox(file_path)
-                await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"O arquivo excedeu o limite de 10MB do Discord. Link do Litterbox: {litterbox_url}", color=0x335fff), view=None)
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description="O arquivo convertido excede o limite de 10MB do Discord. Enviando para o Catbox...", color=0x335fff), view=None)
+                catbox_url = await upload_catbox(file_path)
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"O arquivo excedeu o limite de 10MB do Discord. Link do Catbox: {catbox_url}", color=0x335fff), view=None)
             else:
                 await interaction.edit_original_response(content=None, embed=discord.Embed(description="**☑️ Concluído!**", color=0x335fff), attachments=[discord.File(file_path)], view=None)
         else:
             if os.path.getsize(file_path) > 10 * 1024 * 1024:
-                await interaction.edit_original_response(content=None, embed=discord.Embed(description="O arquivo excede o limite de 10MB do Discord. Enviando para o Litterbox...", color=0x335fff))
-                litterbox_url = await upload_litterbox(file_path)
-                await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"O arquivo excedeu o limite de 10MB do Discord. Link do Litterbox: {litterbox_url}", color=0x335fff))
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description="O arquivo excede o limite de 10MB do Discord. Enviando para o Catbox...", color=0x335fff))
+                catbox_url = await upload_catbox(file_path)
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"O arquivo excedeu o limite de 10MB do Discord. Link do Catbox: {catbox_url}", color=0x335fff))
             else:
                 await interaction.edit_original_response(content=None, embed=discord.Embed(description="**☑️ Concluído!**", color=0x335fff), attachments=[discord.File(file_path)])
                 
@@ -917,9 +917,9 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
     try:
         if os.path.exists(zip_filename):
             if os.path.getsize(zip_filename) > 10 * 1024 * 1024:
-                await interaction.edit_original_response(content=None, embed=discord.Embed(description="O arquivo ZIP final excede o limite de 10MB do Discord. Enviando para o Litterbox...", color=0x335fff))
-                litterbox_url = await upload_litterbox(zip_filename)
-                await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"{final_msg}\n\nO arquivo ZIP excedeu o limite de 10MB do Discord. Link do Litterbox: {litterbox_url}", color=0x335fff))
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description="O arquivo ZIP final excede o limite de 10MB do Discord. Enviando para o Catbox...", color=0x335fff))
+                catbox_url = await upload_catbox(zip_filename)
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"{final_msg}\n\nO arquivo ZIP excedeu o limite de 10MB do Discord. Link do Catbox: {catbox_url}", color=0x335fff))
             else:
                 await interaction.edit_original_response(content=None, embed=discord.Embed(description=final_msg, color=0x335fff), attachments=[discord.File(zip_filename)])
         else:
@@ -927,12 +927,12 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
     except discord.errors.HTTPException:
         if os.path.exists(zip_filename):
             if os.path.getsize(zip_filename) > 10 * 1024 * 1024:
-                litterbox_url = await upload_litterbox(zip_filename)
-                await interaction.channel.send(content=None, embed=discord.Embed(description=f"{final_msg}\n\nO arquivo ZIP excedeu o limite de 10MB do Discord. Link do Litterbox: {litterbox_url}", color=0x335fff))
+                catbox_url = await upload_catbox(zip_filename)
+                await interaction.channel.send(content=None, embed=discord.Embed(description=f"{final_msg}\n\nO arquivo ZIP excedeu o limite de 10MB do Discord. Link do Catbox: {catbox_url}", color=0x335fff))
             else:
                 await interaction.channel.send(content=None, embed=discord.Embed(description=final_msg, color=0x335fff), file=discord.File(zip_filename))
         else:
-            await interaction.channel.send(embed=discord.Embed(description=f"{final_msg}\n\n**❌ Erro:** O arquivo ZIP falhou ao ser salvo no disco.", color=0x335fff))
+            await interaction.channel.send(embed=discord.Embed(description=f"{final_msg}\n\n**❌ Erro: O arquivo ZIP falhou ao ser salvo no disco.**", color=0x335fff))
 
     try:
         if os.path.exists(zip_filename):
