@@ -62,7 +62,7 @@ NO_BINARY_TYPES = [21, 34]
 async def upload_litterbox(file_path: str, expire="72h"):
     url = "https://litterbox.catbox.moe/resources/internals/api.php"
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=300)) as session:
             with open(file_path, 'rb') as f:
                 data = aiohttp.FormData()
                 data.add_field('reqtype', 'fileupload')
@@ -224,7 +224,15 @@ async def convert_media(input_path: str, format: str, quality: str) -> str:
             cwd=os.path.abspath(input_dir)
         )
 
-        stdout, stderr = await process.communicate()
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=300)
+        except asyncio.TimeoutError:
+            try:
+                process.kill()
+            except Exception:
+                pass
+            logger.error(f"FFmpeg timeout para {input_path}")
+            return input_path
 
         if stdout:
             logger.info(stdout.decode(errors="ignore"))
@@ -403,7 +411,16 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
             stderr=asyncio.subprocess.PIPE,
             cwd=os.path.abspath(output_dir)
         )
-        stdout, stderr = await process.communicate()
+        
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=600)
+        except asyncio.TimeoutError:
+            try:
+                process.kill()
+            except Exception:
+                pass
+            logger.error("FFmpeg concatenação timeout.")
+            return None
         
         if process.returncode != 0:
             logger.error("Falha na reconstrução HLS.")
@@ -704,7 +721,7 @@ async def asset(interaction: discord.Interaction, asset_id: str):
     
     clean_id = asset_id.strip()
     
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=600)) as session:
         file_path, error = await download_core(session, clean_id)
         state["current"] = 1
         
@@ -780,7 +797,7 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
     errors = []
     failed_ids = []
 
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=600)) as session:
         results = []
         for aid in ids_list:
             try:
