@@ -760,7 +760,11 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
 
     ptask = asyncio.create_task(progress_task())
     
-    ids_list = [x.strip() for x in asset_ids.split(',') if x.strip()]
+    raw_ids = [x.strip() for x in asset_ids.split(',') if x.strip()]
+    ids_list = []
+    for x in raw_ids:
+        if x not in ids_list:
+            ids_list.append(x)
     
     if len(ids_list) > 20:
         ptask.cancel()
@@ -783,16 +787,15 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
     for aid, res in zip(ids_list, results):
         if isinstance(res, tuple):
             path, err = res
-
             if path:
                 downloaded_files.append(path)
+            else:
+                failed_ids.append(aid)
+                if err:
+                    errors.append(err)
         else:
             failed_ids.append(aid)
-            if err:
-                errors.append(err)
-    else:
-        failed_ids.append(aid)
-        errors.append(f"Excecao severa: {str(res)}")
+            errors.append(f"Exceção severa: {str(res)}")
 
     ptask.cancel()
     await interaction.edit_original_response(content=None, embed=discord.Embed(description="Processando...\n🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩", color=0x1446ff))
