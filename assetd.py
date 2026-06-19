@@ -105,34 +105,8 @@ def detect_file_extension(content: bytes, content_type: str, fallback_ext: str) 
     
     return fallback_ext
 
-async def fetch_user_groups(session: aiohttp.ClientSession, user_id: int):
-    groups = []
-    url = f"https://groups.roproxy.com/v1/users/{user_id}/groups/roles"
-    try:
-        async with session.get(url) as response:
-            if response.status == 200:
-                data = await response.json()
-                for g in data.get("data", []):
-                    groups.append(g["group"]["id"])
-    except Exception:
-        pass
-    return groups
-
-async def fetch_user_friends(session: aiohttp.ClientSession, user_id: int):
-    friends = []
-    url = f"https://friends.roproxy.com/v1/users/{user_id}/friends"
-    try:
-        async with session.get(url) as response:
-            if response.status == 200:
-                data = await response.json()
-                for f in data.get("data", []):
-                    friends.append(f["id"])
-    except Exception:
-        pass
-    return friends
-
 async def fetch_creator_games(session: aiohttp.ClientSession, creator_id: int, creator_type: str):
-    experiences = []
+    games_info = []
     url = f"https://games.roproxy.com/v2/groups/{creator_id}/games?accessFilter=2&sortOrder=Asc&limit=50" if creator_type == "Group" else f"https://games.roproxy.com/v2/users/{creator_id}/games?accessFilter=2&sortOrder=Asc&limit=50"
     
     try:
@@ -140,14 +114,13 @@ async def fetch_creator_games(session: aiohttp.ClientSession, creator_id: int, c
             if response.status == 200:
                 data = await response.json()
                 for game in data.get("data", []):
-                    if "rootPlace" in game and "id" in game["rootPlace"]:
-                        experiences.append({
-                            "placeId": game["rootPlace"]["id"],
-                            "universeId": game.get("id")
-                        })
+                    pid = game["rootPlace"]["id"] if "rootPlace" in game and "id" in game["rootPlace"] else None
+                    uid = game.get("id")
+                    if pid or uid:
+                        games_info.append({"place_id": pid, "universe_id": uid})
     except Exception as e:
         logger.warning(f"Falha ao buscar experiencias do criador {creator_id}: {e}")
-    return experiences
+    return games_info
 
 async def fetch_asset_details(session: aiohttp.ClientSession, asset_id: str, max_retries=10):
     url = f"https://economy.roproxy.com/v2/assets/{asset_id}/details"
@@ -167,7 +140,7 @@ async def fetch_asset_details(session: aiohttp.ClientSession, asset_id: str, max
             await asyncio.sleep(0.5)
     return None
 
-async def fetch_asset_location(session: aiohttp.ClientSession, asset_id: str, place_id=None, universe_id=None, cookie=None):
+async def fetch_asset_location(session: aiohttp.ClientSession, asset_id: str, place_id=None, cookie=None, universe_id=None):
     url = 'https://assetdelivery.roproxy.com/v2/assets/batch'
     body_array = [{
         "assetId": asset_id,
@@ -197,45 +170,7 @@ async def fetch_asset_location(session: aiohttp.ClientSession, asset_id: str, pl
                     if obj.get("locations") and obj["locations"][0].get("location"):
                         return obj["locations"][0]["location"]
     except Exception as e:
-        logger.debug(f"Erro ao buscar localizacao do asset {asset_id} (Place: {place_id}): {e}")
-    return None
-
-async def fetch_version_fallback(session: aiohttp.ClientSession, asset_id: str, cookie: str = None):
-    versions_to_test = list(range(1, 11)) + [250, 100, 50, 2]
-    for version in versions_to_test:
-        url = f"https://assetdelivery.roproxy.com/v1/asset/?id={asset_id}&version={version}"
-        headers = {
-            "User-Agent": "Roblox/WinInet",
-            "Roblox-Browser-Asset-Request": "false"
-        }
-        
-        if cookie:
-            headers["Cookie"] = f".ROBLOSECURITY={cookie}"
-            
-        try:
-            async with session.get(url, headers=headers, allow_redirects=True) as response:
-                if response.status == 200:
-                    content_type = response.headers.get('Content-Type', '')
-                    if 'text/html' not in content_type.lower() and 'application/json' not in content_type.lower():
-                        logger.info(f"Asset {asset_id} - Sucesso ao recuperar a versao {version} que escapou da moderacao!")
-                        return url
-        except Exception as e:
-            logger.debug(f"Erro ao testar versao {version} do asset {asset_id}: {e}")
-            
-        await asyncio.sleep(0.3)
-        
-    return None
-
-async def fetch_thumbnail_fallback(session: aiohttp.ClientSession, asset_id: str):
-    url = f"https://thumbnails.roproxy.com/v1/assets?assetIds={asset_id}&returnPolicy=PlaceHolder&size=420x420&format=Png"
-    try:
-        async with session.get(url) as response:
-            if response.status == 200:
-                data = await response.json()
-                if data and data.get("data") and len(data["data"]) > 0:
-                    return data["data"][0].get("imageUrl")
-    except Exception as e:
-        logger.debug(f"Erro no fallback de thumbnail para o asset {asset_id}: {e}")
+        logger.debug(f"Erro ao buscar localizacao do asset {asset_id} (Place: {place_id}, Universe: {universe_id}): {e}")
     return None
 
 def sanitize_filename(name: str) -> str:
@@ -491,10 +426,32 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         logger.error(f"Erro geral processando HLS: {e}")
         return None
 
-async def download_core(session: aiohttp.ClientSession, asset_id: str, depth=0):
-    if depth > 2:
-        return None, "Profundidade maxima de sub-assets atingida."
+async def fetch_version_fallback(session: aiohttp.ClientSession, asset_id: str, cookie: str = None, max_versions=10):
+    for version in range(1, max_versions + 1):
+        url = f"https://assetdelivery.roproxy.com/v1/asset/?id={asset_id}&version={version}"
+        headers = {
+            "User-Agent": "Roblox/WinInet",
+            "Roblox-Browser-Asset-Request": "false"
+        }
+        
+        if cookie:
+            headers["Cookie"] = f".ROBLOSECURITY={cookie}"
+            
+        try:
+            async with session.get(url, headers=headers, allow_redirects=True) as response:
+                if response.status == 200:
+                    content_type = response.headers.get('Content-Type', '')
+                    if 'text/html' not in content_type.lower() and 'application/json' not in content_type.lower():
+                        logger.info(f"Asset {asset_id} - Sucesso ao recuperar a versao {version} que escapou da moderacao!")
+                        return url
+        except Exception as e:
+            logger.debug(f"Erro ao testar versao {version} do asset {asset_id}: {e}")
+            
+        await asyncio.sleep(0.5)
+        
+    return None
 
+async def download_core(session: aiohttp.ClientSession, asset_id: str):
     details = await fetch_asset_details(session, asset_id)
     
     asset_name = str(asset_id)
@@ -520,87 +477,61 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str, depth=0):
         return None, msg
 
     asset_url = None
-    is_thumbnail = False
 
-    ids_to_try = [asset_id]
-    if asset_type_id == 13 or not asset_type_id:
-        for i in range(1, 6):
-            if int(asset_id) - i > 0:
-                ids_to_try.append(str(int(asset_id) - i))
-
-    for target_id in ids_to_try:
-        logger.info(f"Asset {asset_id} - Testando URL publica (Target ID: {target_id})...")
-        asset_url = await fetch_asset_location(session, target_id)
+    if asset_type_id:
+        logger.info(f"Asset {asset_id} - Tentando obter URL de forma publica...")
+        asset_url = await fetch_asset_location(session, asset_id)
         
         if asset_url:
             logger.info(f"Asset {asset_id} - URL publica obtida com sucesso!")
-            break
         else:
-            logger.info(f"Asset {asset_id} - Acesso publico negado. Tentando fallbacks basicos e brutais...")
+            logger.info(f"Asset {asset_id} - Acesso publico negado. Tentando fallback com PlaceIds/UniverseIds e Cookie...")
             
             if creator_id:
-                experiences = await fetch_creator_games(session, creator_id, creator_type)
-                if experiences:
-                    for exp in experiences:
-                        asset_url = await fetch_asset_location(session, target_id, exp["placeId"], exp["universeId"], ROBLOX_COOKIE)
-                        if asset_url:
-                            logger.info(f"Asset {asset_id} - URL obtida via fallback basico (PlaceID: {exp['placeId']}).")
-                            break
-                
-                if not asset_url and creator_type == "User":
-                    logger.info(f"Asset {asset_id} - Varredura brutal: Grupos do criador...")
-                    group_ids = await fetch_user_groups(session, creator_id)
-                    for gid in group_ids[:5]:
-                        g_exps = await fetch_creator_games(session, gid, "Group")
-                        for exp in g_exps[:10]:
-                            asset_url = await fetch_asset_location(session, target_id, exp["placeId"], exp["universeId"], ROBLOX_COOKIE)
+                games_info = await fetch_creator_games(session, creator_id, creator_type)
+                if games_info:
+                    for g in games_info:
+                        if g.get("place_id"):
+                            asset_url = await fetch_asset_location(session, asset_id, g["place_id"], ROBLOX_COOKIE)
                             if asset_url:
-                                logger.info(f"Asset {asset_id} - URL obtida via grupo {gid} (PlaceID: {exp['placeId']}).")
+                                logger.info(f"Asset {asset_id} - URL obtida via fallback (PlaceID: {g['place_id']}).")
                                 break
-                        if asset_url:
-                            break
-
-                if not asset_url and creator_type == "User":
-                    logger.info(f"Asset {asset_id} - Varredura brutal: Amigos do criador...")
-                    friend_ids = await fetch_user_friends(session, creator_id)
-                    for fid in friend_ids[:5]:
-                        f_exps = await fetch_creator_games(session, fid, "User")
-                        for exp in f_exps[:10]:
-                            asset_url = await fetch_asset_location(session, target_id, exp["placeId"], exp["universeId"], ROBLOX_COOKIE)
+                        if g.get("universe_id"):
+                            asset_url = await fetch_asset_location(session, asset_id, None, ROBLOX_COOKIE, g["universe_id"])
                             if asset_url:
-                                logger.info(f"Asset {asset_id} - URL obtida via amigo {fid} (PlaceID: {exp['placeId']}).")
+                                logger.info(f"Asset {asset_id} - URL obtida via fallback (UniverseID: {g['universe_id']}).")
                                 break
-                        if asset_url:
-                            break
-            
-            if asset_url: break
-
-        if not asset_url:
-            logger.info(f"Asset {asset_id} - Tentando bypass profundo de historico de versoes...")
-            asset_url = await fetch_version_fallback(session, target_id, ROBLOX_COOKIE)
-
-        if not asset_url and FALLBACK_GAMES:
-            logger.info(f"Asset {asset_id} - Tentando {len(FALLBACK_GAMES)} jogos de fallback-games.txt...")
-            for place_id in FALLBACK_GAMES:
-                test_url = await fetch_asset_location(session, target_id, place_id, None, ROBLOX_COOKIE)
-                if test_url:
-                    asset_url = test_url
-                    logger.info(f"Asset {asset_id} - URL obtida via fallback-games.txt (PlaceID: {place_id})")
-                    break
-
-        if asset_url: break
-
-    if not asset_url and asset_type_id not in [3, 62]:
-        logger.info(f"Asset {asset_id} - Todas as tentativas falharam. Tentando recuperar Thumbnail...")
-        asset_url = await fetch_thumbnail_fallback(session, asset_id)
-        if asset_url:
-            is_thumbnail = True
-            logger.info(f"Asset {asset_id} - Thumbnail obtida com sucesso como ultimo recurso.")
-    elif not asset_url and asset_type_id in [3, 62]:
-        logger.warning(f"Asset {asset_id} - Binário inacessível. Fallback de thumbnail ignorado (midia).")
+                else:
+                    logger.warning(f"Asset {asset_id} - Nenhuma experiencia encontrada para o criador.")
+            else:
+                logger.error(f"Asset {asset_id} - Nao foi possivel obter o criador do asset para o fallback.")
 
     if not asset_url:
-        msg = f"Asset {asset_id} - URL inacessivel. O item foi excluido permanentemente e não possui versoes salvos ou thumbnails."
+        logger.info(f"Asset {asset_id} - Tentando bypass de historico de versoes (forçado)...")
+        asset_url = await fetch_version_fallback(session, asset_id, ROBLOX_COOKIE)
+
+        if not asset_url and FALLBACK_GAMES:
+            logger.info(
+            f"Asset {asset_id} - Tentando {len(FALLBACK_GAMES)} jogos de fallback-games.txt..."
+            )
+
+        for place_id in FALLBACK_GAMES:
+            test_url = await fetch_asset_location(
+                session,
+                asset_id,
+                place_id,
+                ROBLOX_COOKIE
+            )
+
+            if test_url:
+                asset_url = test_url
+                logger.info(
+                    f"Asset {asset_id} - URL obtida via fallback-games.txt (PlaceID: {place_id})"
+                )
+                break
+
+    if not asset_url:
+        msg = f"Asset {asset_id} - URL de download inacessivel. O item provavelmente foi excluido permanentemente e não possui versões salvas."
         logger.error(msg)
         return None, msg
 
@@ -613,7 +544,7 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str, depth=0):
                 return None, msg
 
             content_type = response.headers.get('Content-Type', '')
-            if not is_thumbnail and ('text/html' in content_type.lower() or 'application/json' in content_type.lower()):
+            if 'text/html' in content_type.lower() or 'application/json' in content_type.lower():
                 msg = f"Asset {asset_id} - Arquivo invalido retornado (HTML/JSON de erro)."
                 logger.error(msg)
                 return None, msg
@@ -626,10 +557,10 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str, depth=0):
                 logger.error(msg)
                 return None, msg
 
-            final_ext = '.png' if is_thumbnail else detect_file_extension(content, content_type, '.bin')
+            final_ext = detect_file_extension(content, content_type, '.bin')
 
             logger.info(f"Content-Type: {content_type}")
-            logger.info(f"Extensao detectada: {final_ext}")
+            logger.info(f"Extensão detectada: {final_ext}")
 
             os.makedirs("downloaded_assets", exist_ok=True)
             file_path = os.path.join("downloaded_assets", f"{asset_id}_{sanitized_name}{final_ext}")
@@ -638,32 +569,13 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str, depth=0):
                 f.write(content)
             
             if final_ext == '.m3u8':
-                logger.info(f"Asset {asset_id} - Playlist HLS detectada. Iniciando reconstrucao...")
+                logger.info(f"Asset {asset_id} - Playlist HLS detectada. Iniciando reconstrução...")
                 hls_webm_path = await process_hls_playlist(session, file_path, asset_url)
                 if not hls_webm_path:
                     msg = f"Asset {asset_id} - Falha ao reconstruir video HLS."
                     logger.error(msg)
                     return None, msg
                 file_path = hls_webm_path
-
-            if final_ext == '.rbxmx':
-                logger.info(f"Asset {asset_id} - Arquivo XML detectado. Inspecionando por sub-assets na CDN...")
-                try:
-                    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                        xml_content = f.read()
-                    match = re.search(r'rbxassetid://(\d+)', xml_content)
-                    if match:
-                        sub_id = match.group(1)
-                        logger.info(f"Asset {asset_id} - Sub-asset {sub_id} encontrado. Baixando recurso interno...")
-                        sub_path, sub_err = await download_core(session, sub_id, depth + 1)
-                        if sub_path:
-                            try:
-                                os.remove(file_path)
-                            except Exception:
-                                pass
-                            return sub_path, None
-                except Exception as e:
-                    logger.error(f"Asset {asset_id} - Falha ao ler XML para sub-assets: {e}")
                 
             logger.info(f"Sucesso: {file_path}")
             return file_path, None
@@ -727,7 +639,7 @@ class ConfirmButton(discord.ui.Button):
         self.view.confirmed = True
         for child in self.view.children:
             child.disabled = True
-        await interaction.response.edit_message(content="Processando conversão (FFmpeg)...", view=self.view)
+        await interaction.response.edit_message(content=None, embed=discord.Embed(description="Processando conversão (FFmpeg)...", color=0x1446ff), view=self.view)
         self.view.stop()
 
 class MediaFormatView(discord.ui.View):
@@ -774,7 +686,7 @@ client = RobloxAssetBot()
 
 @client.tree.command(name="asset", description="Baixa um unico asset do Roblox de forma segura")
 async def asset(interaction: discord.Interaction, asset_id: str):
-    await interaction.response.send_message("Processando...\n🟩")
+    await interaction.response.send_message(embed=discord.Embed(description="Processando...\n🟩", color=0x1446ff))
     
     async def progress_task():
         try:
@@ -782,7 +694,7 @@ async def asset(interaction: discord.Interaction, asset_id: str):
             while i < 10:
                 await asyncio.sleep(1)
                 i += 1
-                await interaction.edit_original_response(content=f"Processando...\n{'🟩' * i}")
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"Processando...\n{'🟩' * i}", color=0x1446ff))
         except asyncio.CancelledError:
             pass
 
@@ -794,7 +706,7 @@ async def asset(interaction: discord.Interaction, asset_id: str):
         file_path, error = await download_core(session, clean_id)
         
     ptask.cancel()
-    await interaction.edit_original_response(content="Processando...\n🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩")
+    await interaction.edit_original_response(content=None, embed=discord.Embed(description="Processando...\n🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩", color=0x1446ff))
         
     if file_path and os.path.exists(file_path):
         has_a = file_path.endswith('.ogg')
@@ -802,7 +714,7 @@ async def asset(interaction: discord.Interaction, asset_id: str):
         
         if has_a or has_v:
             view = MediaFormatView(has_a, has_v)
-            await interaction.edit_original_response(content="Mídia detectada! Selecione os formatos e qualidades:", view=view)
+            await interaction.edit_original_response(content=None, embed=discord.Embed(description="Mídia detectada! Selecione os formatos e qualidades:", color=0x1446ff), view=view)
             await view.wait()
             
             if view.confirmed:
@@ -811,18 +723,18 @@ async def asset(interaction: discord.Interaction, asset_id: str):
                 file_path = await convert_media(file_path, fmt, qual)
             
             if os.path.getsize(file_path) > 10 * 1024 * 1024:
-                await interaction.edit_original_response(content="O arquivo convertido excede o limite de 10MB do Discord. Enviando para o Litterbox...", view=None)
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description="O arquivo convertido excede o limite de 10MB do Discord. Enviando para o Litterbox...", color=0x1446ff), view=None)
                 litterbox_url = await upload_litterbox(file_path)
-                await interaction.edit_original_response(content=f"O arquivo excedeu o limite de 10MB do Discord. Link do Litterbox: {litterbox_url}", view=None)
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"O arquivo excedeu o limite de 10MB do Discord. Link do Litterbox: {litterbox_url}", color=0x1446ff), view=None)
             else:
-                await interaction.edit_original_response(content="Concluído!", attachments=[discord.File(file_path)], view=None)
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description="Concluído!", color=0x1446ff), attachments=[discord.File(file_path)], view=None)
         else:
             if os.path.getsize(file_path) > 10 * 1024 * 1024:
-                await interaction.edit_original_response(content="O arquivo excede o limite de 10MB do Discord. Enviando para o Litterbox...")
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description="O arquivo excede o limite de 10MB do Discord. Enviando para o Litterbox...", color=0x1446ff))
                 litterbox_url = await upload_litterbox(file_path)
-                await interaction.edit_original_response(content=f"O arquivo excedeu o limite de 10MB do Discord. Link do Litterbox: {litterbox_url}")
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"O arquivo excedeu o limite de 10MB do Discord. Link do Litterbox: {litterbox_url}", color=0x1446ff))
             else:
-                await interaction.edit_original_response(content="Concluído!", attachments=[discord.File(file_path)])
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description="Concluído!", color=0x1446ff), attachments=[discord.File(file_path)])
                 
         try:
             if os.path.exists(file_path):
@@ -830,11 +742,11 @@ async def asset(interaction: discord.Interaction, asset_id: str):
         except Exception:
             pass
     else:
-        await interaction.edit_original_response(content=f"Erro: {error}")
+        await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"Erro: {error}", color=0x1446ff))
 
 @client.tree.command(name="assetbatch", description="Baixa multiplos assets e retorna um arquivo ZIP limpo")
 async def assetbatch(interaction: discord.Interaction, asset_ids: str):
-    await interaction.response.send_message("Processando...\n🟩")
+    await interaction.response.send_message(embed=discord.Embed(description="Processando...\n🟩", color=0x1446ff))
     
     async def progress_task():
         try:
@@ -842,7 +754,7 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
             while i < 10:
                 await asyncio.sleep(1.5)
                 i += 1
-                await interaction.edit_original_response(content=f"Processando...\n{'🟩' * i}")
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"Processando...\n{'🟩' * i}", color=0x1446ff))
         except asyncio.CancelledError:
             pass
 
@@ -852,7 +764,7 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
     
     if len(ids_list) > 20:
         ptask.cancel()
-        await interaction.edit_original_response(content="Por favor, limite a 20 assets por lote para evitar sobrecarga.")
+        await interaction.edit_original_response(content=None, embed=discord.Embed(description="Por favor, limite a 20 assets por lote para evitar sobrecarga.", color=0x1446ff))
         return
 
     downloaded_files = []
@@ -883,11 +795,11 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
         errors.append(f"Excecao severa: {str(res)}")
 
     ptask.cancel()
-    await interaction.edit_original_response(content="Processando...\n🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩")
+    await interaction.edit_original_response(content=None, embed=discord.Embed(description="Processando...\n🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩", color=0x1446ff))
 
     if not downloaded_files:
         err_msg = "\n".join(errors)[:1800]
-        await interaction.edit_original_response(content=f"Falha total no lote. Nenhum arquivo foi salvo.\nErros:\n{err_msg}")
+        await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"Falha total no lote. Nenhum arquivo foi salvo.\nErros:\n{err_msg}", color=0x1446ff))
         return
 
     has_a = any(f.endswith('.ogg') for f in downloaded_files)
@@ -895,7 +807,7 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
 
     if has_a or has_v:
         view = MediaFormatView(has_a, has_v)
-        await interaction.edit_original_response(content="Mídias detectadas no lote! Selecione os formatos e qualidades:", view=view)
+        await interaction.edit_original_response(content=None, embed=discord.Embed(description="Mídias detectadas no lote! Selecione os formatos e qualidades:", color=0x1446ff), view=view)
         await view.wait()
         
         if view.confirmed:
@@ -907,11 +819,11 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
                     f = await convert_media(f, view.video_fmt, view.video_quality)
                 new_files.append(f)
             downloaded_files = new_files
-            await interaction.edit_original_response(content="Criando ZIP...", view=None)
+            await interaction.edit_original_response(content=None, embed=discord.Embed(description="Criando ZIP...", color=0x1446ff), view=None)
         else:
-            await interaction.edit_original_response(content="Tempo esgotado. Mantendo os arquivos originais e criando ZIP...", view=None)
+            await interaction.edit_original_response(content=None, embed=discord.Embed(description="Tempo esgotado. Mantendo os arquivos originais e criando ZIP...", color=0x1446ff), view=None)
     else:
-        await interaction.edit_original_response(content="Criando ZIP...")
+        await interaction.edit_original_response(content=None, embed=discord.Embed(description="Criando ZIP...", color=0x1446ff))
 
     zip_filename = f"batch_{uuid.uuid4().hex[:8]}.zip"
     
@@ -934,11 +846,11 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
 
     if os.path.exists(zip_filename):
         if os.path.getsize(zip_filename) > 10 * 1024 * 1024:
-            await interaction.edit_original_response(content="O arquivo ZIP final excede o limite de 10MB do Discord. Enviando para o Litterbox...")
+            await interaction.edit_original_response(content=None, embed=discord.Embed(description="O arquivo ZIP final excede o limite de 10MB do Discord. Enviando para o Litterbox...", color=0x1446ff))
             litterbox_url = await upload_litterbox(zip_filename)
-            await interaction.edit_original_response(content=f"{final_msg}\n\nO arquivo ZIP excedeu o limite de 10MB do Discord. Link do Litterbox: {litterbox_url}")
+            await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"{final_msg}\n\nO arquivo ZIP excedeu o limite de 10MB do Discord. Link do Litterbox: {litterbox_url}", color=0x1446ff))
         else:
-            await interaction.edit_original_response(content=final_msg, attachments=[discord.File(zip_filename)])
+            await interaction.edit_original_response(content=None, embed=discord.Embed(description=final_msg, color=0x1446ff), attachments=[discord.File(zip_filename)])
             
         try:
             os.remove(zip_filename)
