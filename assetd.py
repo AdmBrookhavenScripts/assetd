@@ -746,7 +746,7 @@ async def asset(interaction: discord.Interaction, asset_id: str):
 
 @client.tree.command(name="assetbatch", description="Baixa multiplos assets e retorna um arquivo ZIP limpo")
 async def assetbatch(interaction: discord.Interaction, asset_ids: str):
-    await interaction.response.send_message(embed=discord.Embed(description="Processando...\n🟩⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️", color=0x1446ff))
+    await interaction.response.send_message(embed=discord.Embed(description="Processando...\n`🟩⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️`", color=0x1446ff))
     
     async def progress_task():
         try:
@@ -754,7 +754,7 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
             while i < 10:
                 await asyncio.sleep(1.5)
                 i += 1
-                await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"Processando...\n{'🟩' * i}{'⬜️' * (10 - i)}", color=0x1446ff))
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"Processando...\n{'`🟩`' * i}{'`⬜️`' * (10 - i)}", color=0x1446ff))
         except asyncio.CancelledError:
             pass
 
@@ -798,7 +798,7 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
             errors.append(f"Exceção severa: {str(res)}")
 
     ptask.cancel()
-    await interaction.edit_original_response(content=None, embed=discord.Embed(description="Processando...\n🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩", color=0x1446ff))
+    await interaction.edit_original_response(content=None, embed=discord.Embed(description="Processando...\n`🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩`", color=0x1446ff))
 
     if not downloaded_files:
         err_msg = "\n".join(errors)[:1800]
