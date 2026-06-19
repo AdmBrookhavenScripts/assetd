@@ -105,6 +105,32 @@ def detect_file_extension(content: bytes, content_type: str, fallback_ext: str) 
     
     return fallback_ext
 
+async def fetch_user_groups(session: aiohttp.ClientSession, user_id: int):
+    groups = []
+    url = f"https://groups.roproxy.com/v1/users/{user_id}/groups/roles"
+    try:
+        async with session.get(url) as response:
+            if response.status == 200:
+                data = await response.json()
+                for g in data.get("data", []):
+                    groups.append(g["group"]["id"])
+    except Exception:
+        pass
+    return groups
+
+async def fetch_user_friends(session: aiohttp.ClientSession, user_id: int):
+    friends = []
+    url = f"https://friends.roproxy.com/v1/users/{user_id}/friends"
+    try:
+        async with session.get(url) as response:
+            if response.status == 200:
+                data = await response.json()
+                for f in data.get("data", []):
+                    friends.append(f["id"])
+    except Exception:
+        pass
+    return friends
+
 async def fetch_creator_games(session: aiohttp.ClientSession, creator_id: int, creator_type: str):
     experiences = []
     url = f"https://games.roproxy.com/v2/groups/{creator_id}/games?accessFilter=2&sortOrder=Asc&limit=50" if creator_type == "Group" else f"https://games.roproxy.com/v2/users/{creator_id}/games?accessFilter=2&sortOrder=Asc&limit=50"
@@ -510,7 +536,7 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str, depth=0):
             logger.info(f"Asset {asset_id} - URL publica obtida com sucesso!")
             break
         else:
-            logger.info(f"Asset {asset_id} - Acesso publico negado. Tentando fallback com PlaceIds e UniverseIds...")
+            logger.info(f"Asset {asset_id} - Acesso publico negado. Tentando fallbacks basicos e brutais...")
             
             if creator_id:
                 experiences = await fetch_creator_games(session, creator_id, creator_type)
@@ -518,10 +544,34 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str, depth=0):
                     for exp in experiences:
                         asset_url = await fetch_asset_location(session, target_id, exp["placeId"], exp["universeId"], ROBLOX_COOKIE)
                         if asset_url:
-                            logger.info(f"Asset {asset_id} - URL obtida via fallback (PlaceID: {exp['placeId']}, UniverseID: {exp['universeId']}).")
+                            logger.info(f"Asset {asset_id} - URL obtida via fallback basico (PlaceID: {exp['placeId']}).")
                             break
-                else:
-                    logger.warning(f"Asset {asset_id} - Nenhuma experiencia encontrada para o criador.")
+                
+                if not asset_url and creator_type == "User":
+                    logger.info(f"Asset {asset_id} - Varredura brutal: Grupos do criador...")
+                    group_ids = await fetch_user_groups(session, creator_id)
+                    for gid in group_ids[:5]:
+                        g_exps = await fetch_creator_games(session, gid, "Group")
+                        for exp in g_exps[:10]:
+                            asset_url = await fetch_asset_location(session, target_id, exp["placeId"], exp["universeId"], ROBLOX_COOKIE)
+                            if asset_url:
+                                logger.info(f"Asset {asset_id} - URL obtida via grupo {gid} (PlaceID: {exp['placeId']}).")
+                                break
+                        if asset_url:
+                            break
+
+                if not asset_url and creator_type == "User":
+                    logger.info(f"Asset {asset_id} - Varredura brutal: Amigos do criador...")
+                    friend_ids = await fetch_user_friends(session, creator_id)
+                    for fid in friend_ids[:5]:
+                        f_exps = await fetch_creator_games(session, fid, "User")
+                        for exp in f_exps[:10]:
+                            asset_url = await fetch_asset_location(session, target_id, exp["placeId"], exp["universeId"], ROBLOX_COOKIE)
+                            if asset_url:
+                                logger.info(f"Asset {asset_id} - URL obtida via amigo {fid} (PlaceID: {exp['placeId']}).")
+                                break
+                        if asset_url:
+                            break
             
             if asset_url: break
 
@@ -540,12 +590,14 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str, depth=0):
 
         if asset_url: break
 
-    if not asset_url:
-        logger.info(f"Asset {asset_id} - Todas as tentativas de binario falharam. Tentando recuperar Thumbnail...")
+    if not asset_url and asset_type_id not in [3, 62]:
+        logger.info(f"Asset {asset_id} - Todas as tentativas falharam. Tentando recuperar Thumbnail...")
         asset_url = await fetch_thumbnail_fallback(session, asset_id)
         if asset_url:
             is_thumbnail = True
             logger.info(f"Asset {asset_id} - Thumbnail obtida com sucesso como ultimo recurso.")
+    elif not asset_url and asset_type_id in [3, 62]:
+        logger.warning(f"Asset {asset_id} - Binário inacessível. Fallback de thumbnail ignorado (midia).")
 
     if not asset_url:
         msg = f"Asset {asset_id} - URL inacessivel. O item foi excluido permanentemente e não possui versoes salvos ou thumbnails."
