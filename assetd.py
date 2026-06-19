@@ -639,7 +639,7 @@ class ConfirmButton(discord.ui.Button):
         self.view.confirmed = True
         for child in self.view.children:
             child.disabled = True
-        await interaction.response.edit_message(content=None, embed=discord.Embed(description="Processando conversão (FFmpeg)...", color=0x1446ff), view=self.view)
+        await interaction.response.edit_message(content=None, embed=discord.Embed(description="**Processando conversão...**", color=0x335fff), view=self.view)
         self.view.stop()
 
 class MediaFormatView(discord.ui.View):
@@ -687,7 +687,7 @@ client = RobloxAssetBot()
 @client.tree.command(name="asset", description="Baixa um unico asset do Roblox de forma segura")
 async def asset(interaction: discord.Interaction, asset_id: str):
     state = {"current": 0, "total": 1}
-    await interaction.response.send_message(embed=discord.Embed(description=f"Processando... {state['current']}/{state['total']} Assets\n`🟩⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️`\n\nTempo estimado: 9s", color=0x1446ff))
+    await interaction.response.send_message(embed=discord.Embed(description=f"**🕣 Processando... {state['current']}/{state['total']} Assets\n`🟩⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️`\n\nTempo estimado: 9s**", color=0x335fff))
     
     async def progress_task():
         try:
@@ -695,8 +695,8 @@ async def asset(interaction: discord.Interaction, asset_id: str):
             while i < 10:
                 await asyncio.sleep(1)
                 i += 1
-                desc = f"Processando... {state['current']}/{state['total']} Assets\n`{'🟩' * i}{'⬜️' * (10 - i)}`\n\nTempo estimado: {10 - i}s"
-                await interaction.edit_original_response(content=None, embed=discord.Embed(description=desc, color=0x1446ff))
+                desc = f"**🕣 Processando... {state['current']}/{state['total']} Assets\n`{'🟩' * i}{'⬜️' * (10 - i)}`\n\nTempo estimado: {10 - i}s**"
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description=desc, color=0x335fff))
         except asyncio.CancelledError:
             pass
 
@@ -709,7 +709,7 @@ async def asset(interaction: discord.Interaction, asset_id: str):
         state["current"] = 1
         
     ptask.cancel()
-    await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"Processando... {state['total']}/{state['total']} Assets\n`🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩`\n\nTempo estimado: 0s", color=0x1446ff))
+    await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"**🕣 Processando... {state['total']}/{state['total']} Assets\n`🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩`\n\nTempo estimado: 0s**", color=0x335fff))
         
     if file_path and os.path.exists(file_path):
         has_a = file_path.endswith('.ogg')
@@ -717,7 +717,7 @@ async def asset(interaction: discord.Interaction, asset_id: str):
         
         if has_a or has_v:
             view = MediaFormatView(has_a, has_v)
-            await interaction.edit_original_response(content=None, embed=discord.Embed(description="Mídia detectada! Selecione os formatos e qualidades:", color=0x1446ff), view=view)
+            await interaction.edit_original_response(content=None, embed=discord.Embed(description="Mídia detectada! Selecione os formatos e qualidades:", color=0x335fff), view=view)
             await view.wait()
             
             if view.confirmed:
@@ -726,18 +726,18 @@ async def asset(interaction: discord.Interaction, asset_id: str):
                 file_path = await convert_media(file_path, fmt, qual)
             
             if os.path.getsize(file_path) > 10 * 1024 * 1024:
-                await interaction.edit_original_response(content=None, embed=discord.Embed(description="O arquivo convertido excede o limite de 10MB do Discord. Enviando para o Litterbox...", color=0x1446ff), view=None)
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description="O arquivo convertido excede o limite de 10MB do Discord. Enviando para o Litterbox...", color=0x335fff), view=None)
                 litterbox_url = await upload_litterbox(file_path)
-                await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"O arquivo excedeu o limite de 10MB do Discord. Link do Litterbox: {litterbox_url}", color=0x1446ff), view=None)
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"O arquivo excedeu o limite de 10MB do Discord. Link do Litterbox: {litterbox_url}", color=0x335fff), view=None)
             else:
-                await interaction.edit_original_response(content=None, embed=discord.Embed(description="Concluído!", color=0x1446ff), attachments=[discord.File(file_path)], view=None)
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description="**☑️ Concluído!**", color=0x335fff), attachments=[discord.File(file_path)], view=None)
         else:
             if os.path.getsize(file_path) > 10 * 1024 * 1024:
-                await interaction.edit_original_response(content=None, embed=discord.Embed(description="O arquivo excede o limite de 10MB do Discord. Enviando para o Litterbox...", color=0x1446ff))
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description="O arquivo excede o limite de 10MB do Discord. Enviando para o Litterbox...", color=0x335fff))
                 litterbox_url = await upload_litterbox(file_path)
-                await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"O arquivo excedeu o limite de 10MB do Discord. Link do Litterbox: {litterbox_url}", color=0x1446ff))
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"O arquivo excedeu o limite de 10MB do Discord. Link do Litterbox: {litterbox_url}", color=0x335fff))
             else:
-                await interaction.edit_original_response(content=None, embed=discord.Embed(description="Concluído!", color=0x1446ff), attachments=[discord.File(file_path)])
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description="**☑️ Concluído!**", color=0x335fff), attachments=[discord.File(file_path)])
                 
         try:
             if os.path.exists(file_path):
@@ -745,7 +745,7 @@ async def asset(interaction: discord.Interaction, asset_id: str):
         except Exception:
             pass
     else:
-        await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"Erro: {error}", color=0x1446ff))
+        await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"❌️ Erro: {error}", color=0x335fff))
 
 @client.tree.command(name="assetbatch", description="Baixa multiplos assets e retorna um arquivo ZIP limpo")
 async def assetbatch(interaction: discord.Interaction, asset_ids: str):
@@ -756,11 +756,11 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
             ids_list.append(x)
             
     if len(ids_list) > 20:
-        await interaction.response.send_message(embed=discord.Embed(description="Por favor, limite a 20 assets por lote para evitar sobrecarga.", color=0x1446ff))
+        await interaction.response.send_message(embed=discord.Embed(description="Por favor, limite a 20 assets por lote para evitar sobrecarga.", color=0x335fff))
         return
 
     state = {"current": 0, "total": len(ids_list)}
-    await interaction.response.send_message(embed=discord.Embed(description=f"Processando... 0/{state['total']} Assets\n`🟩⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️`\n\nTempo estimado: 13s", color=0x1446ff))
+    await interaction.response.send_message(embed=discord.Embed(description=f"**🕣 Processando... 0/{state['total']} Assets\n`🟩⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️`\n\nTempo estimado: 13s**", color=0x335fff))
     
     async def progress_task():
         try:
@@ -769,8 +769,8 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
                 await asyncio.sleep(1.5)
                 i += 1
                 est = max(1, int((10 - i) * 1.5))
-                desc = f"Processando... {state['current']}/{state['total']} Assets\n`{'🟩' * i}{'⬜️' * (10 - i)}`\n\nTempo estimado: {est}s"
-                await interaction.edit_original_response(content=None, embed=discord.Embed(description=desc, color=0x1446ff))
+                desc = f"**🕣 Processando... {state['current']}/{state['total']} Assets\n`{'🟩' * i}{'⬜️' * (10 - i)}`\n\nTempo estimado: {est}s**"
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description=desc, color=0x335fff))
         except asyncio.CancelledError:
             pass
 
@@ -804,11 +804,11 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
             errors.append(f"Exceção severa: {str(res)}")
 
     ptask.cancel()
-    await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"Processando... {state['total']}/{state['total']} Assets\n`🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩`\n\nTempo estimado: 0s", color=0x1446ff))
+    await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"**🕣 Processando... {state['total']}/{state['total']} Assets\n`🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩`\n\nTempo estimado: 0s**", color=0x335fff))
 
     if not downloaded_files:
         err_msg = "\n".join(errors)[:1800]
-        await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"Falha total no lote. Nenhum arquivo foi salvo.\nErros:\n{err_msg}", color=0x1446ff))
+        await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"Falha total no lote. Nenhum arquivo foi salvo.\nErros:\n{err_msg}", color=0x335fff))
         return
 
     has_a = any(f.endswith('.ogg') for f in downloaded_files)
@@ -816,7 +816,7 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
 
     if has_a or has_v:
         view = MediaFormatView(has_a, has_v)
-        await interaction.edit_original_response(content=None, embed=discord.Embed(description="Mídias detectadas no lote! Selecione os formatos e qualidades:", color=0x1446ff), view=view)
+        await interaction.edit_original_response(content=None, embed=discord.Embed(description="Mídias detectadas no lote! Selecione os formatos e qualidades:", color=0x335fff), view=view)
         await view.wait()
         
         if view.confirmed:
@@ -828,11 +828,11 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
                     f = await convert_media(f, view.video_fmt, view.video_quality)
                 new_files.append(f)
             downloaded_files = new_files
-            await interaction.edit_original_response(content=None, embed=discord.Embed(description="Criando ZIP...", color=0x1446ff), view=None)
+            await interaction.edit_original_response(content=None, embed=discord.Embed(description="Criando ZIP...", color=0x335fff), view=None)
         else:
-            await interaction.edit_original_response(content=None, embed=discord.Embed(description="Tempo esgotado. Mantendo os arquivos originais e criando ZIP...", color=0x1446ff), view=None)
+            await interaction.edit_original_response(content=None, embed=discord.Embed(description="Tempo esgotado. Mantendo os arquivos originais e criando ZIP...", color=0x335fff), view=None)
     else:
-        await interaction.edit_original_response(content=None, embed=discord.Embed(description="Criando ZIP...", color=0x1446ff))
+        await interaction.edit_original_response(content=None, embed=discord.Embed(description="Criando ZIP...", color=0x335fff))
 
     zip_filename = f"batch_{uuid.uuid4().hex[:8]}.zip"
     
@@ -844,9 +844,9 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
                     
     await asyncio.to_thread(create_zip)
 
-    final_msg = f"Lote concluido: {len(downloaded_files)} arquivos processados."
+    final_msg = f"**☑️ Lote concluido: {len(downloaded_files)} arquivos processados.**"
     if failed_ids:
-        final_msg += f"\nFalhas ({len(failed_ids)}): "
+        final_msg += f"\n**❌️ Falhas** ({len(failed_ids)}): "
 
         if len(failed_ids) == 1:
             final_msg += failed_ids[0]
@@ -855,11 +855,11 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
 
     if os.path.exists(zip_filename):
         if os.path.getsize(zip_filename) > 10 * 1024 * 1024:
-            await interaction.edit_original_response(content=None, embed=discord.Embed(description="O arquivo ZIP final excede o limite de 10MB do Discord. Enviando para o Litterbox...", color=0x1446ff))
+            await interaction.edit_original_response(content=None, embed=discord.Embed(description="O arquivo ZIP final excede o limite de 10MB do Discord. Enviando para o Litterbox...", color=0x335fff))
             litterbox_url = await upload_litterbox(zip_filename)
-            await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"{final_msg}\n\nO arquivo ZIP excedeu o limite de 10MB do Discord. Link do Litterbox: {litterbox_url}", color=0x1446ff))
+            await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"{final_msg}\n\nO arquivo ZIP excedeu o limite de 10MB do Discord. Link do Litterbox: {litterbox_url}", color=0x335fff))
         else:
-            await interaction.edit_original_response(content=None, embed=discord.Embed(description=final_msg, color=0x1446ff), attachments=[discord.File(zip_filename)])
+            await interaction.edit_original_response(content=None, embed=discord.Embed(description=final_msg, color=0x335fff), attachments=[discord.File(zip_filename)])
             
         try:
             os.remove(zip_filename)
