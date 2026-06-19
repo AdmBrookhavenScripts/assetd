@@ -106,7 +106,7 @@ def detect_file_extension(content: bytes, content_type: str, fallback_ext: str) 
     return fallback_ext
 
 async def fetch_creator_games(session: aiohttp.ClientSession, creator_id: int, creator_type: str):
-    place_ids = []
+    experiences = []
     url = f"https://games.roproxy.com/v2/groups/{creator_id}/games?accessFilter=2&sortOrder=Asc&limit=50" if creator_type == "Group" else f"https://games.roproxy.com/v2/users/{creator_id}/games?accessFilter=2&sortOrder=Asc&limit=50"
     
     try:
@@ -115,10 +115,13 @@ async def fetch_creator_games(session: aiohttp.ClientSession, creator_id: int, c
                 data = await response.json()
                 for game in data.get("data", []):
                     if "rootPlace" in game and "id" in game["rootPlace"]:
-                        place_ids.append(game["rootPlace"]["id"])
+                        experiences.append({
+                            "placeId": game["rootPlace"]["id"],
+                            "universeId": game.get("id")
+                        })
     except Exception as e:
         logger.warning(f"Falha ao buscar experiencias do criador {creator_id}: {e}")
-    return place_ids
+    return experiences
 
 async def fetch_asset_details(session: aiohttp.ClientSession, asset_id: str, max_retries=10):
     url = f"https://economy.roproxy.com/v2/assets/{asset_id}/details"
@@ -138,7 +141,7 @@ async def fetch_asset_details(session: aiohttp.ClientSession, asset_id: str, max
             await asyncio.sleep(0.5)
     return None
 
-async def fetch_asset_location(session: aiohttp.ClientSession, asset_id: str, place_id=None, cookie=None):
+async def fetch_asset_location(session: aiohttp.ClientSession, asset_id: str, place_id=None, universe_id=None, cookie=None):
     url = 'https://assetdelivery.roproxy.com/v2/assets/batch'
     body_array = [{
         "assetId": asset_id,
@@ -156,6 +159,8 @@ async def fetch_asset_location(session: aiohttp.ClientSession, asset_id: str, pl
         headers["Cookie"] = f".ROBLOSECURITY={cookie}"
     if place_id:
         headers["Roblox-Place-Id"] = str(place_id)
+    if universe_id:
+        headers["Roblox-Universe-Id"] = str(universe_id)
 
     try:
         async with session.post(url, headers=headers, json=body_array) as response:
@@ -167,6 +172,44 @@ async def fetch_asset_location(session: aiohttp.ClientSession, asset_id: str, pl
                         return obj["locations"][0]["location"]
     except Exception as e:
         logger.debug(f"Erro ao buscar localizacao do asset {asset_id} (Place: {place_id}): {e}")
+    return None
+
+async def fetch_version_fallback(session: aiohttp.ClientSession, asset_id: str, cookie: str = None):
+    versions_to_test = list(range(1, 11)) + [250, 100, 50, 2]
+    for version in versions_to_test:
+        url = f"https://assetdelivery.roproxy.com/v1/asset/?id={asset_id}&version={version}"
+        headers = {
+            "User-Agent": "Roblox/WinInet",
+            "Roblox-Browser-Asset-Request": "false"
+        }
+        
+        if cookie:
+            headers["Cookie"] = f".ROBLOSECURITY={cookie}"
+            
+        try:
+            async with session.get(url, headers=headers, allow_redirects=True) as response:
+                if response.status == 200:
+                    content_type = response.headers.get('Content-Type', '')
+                    if 'text/html' not in content_type.lower() and 'application/json' not in content_type.lower():
+                        logger.info(f"Asset {asset_id} - Sucesso ao recuperar a versao {version} que escapou da moderacao!")
+                        return url
+        except Exception as e:
+            logger.debug(f"Erro ao testar versao {version} do asset {asset_id}: {e}")
+            
+        await asyncio.sleep(0.3)
+        
+    return None
+
+async def fetch_thumbnail_fallback(session: aiohttp.ClientSession, asset_id: str):
+    url = f"https://thumbnails.roproxy.com/v1/assets?assetIds={asset_id}&returnPolicy=PlaceHolder&size=420x420&format=Png"
+    try:
+        async with session.get(url) as response:
+            if response.status == 200:
+                data = await response.json()
+                if data and data.get("data") and len(data["data"]) > 0:
+                    return data["data"][0].get("imageUrl")
+    except Exception as e:
+        logger.debug(f"Erro no fallback de thumbnail para o asset {asset_id}: {e}")
     return None
 
 def sanitize_filename(name: str) -> str:
@@ -422,32 +465,10 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         logger.error(f"Erro geral processando HLS: {e}")
         return None
 
-async def fetch_version_fallback(session: aiohttp.ClientSession, asset_id: str, cookie: str = None, max_versions=10):
-    for version in range(1, max_versions + 1):
-        url = f"https://assetdelivery.roproxy.com/v1/asset/?id={asset_id}&version={version}"
-        headers = {
-            "User-Agent": "Roblox/WinInet",
-            "Roblox-Browser-Asset-Request": "false"
-        }
-        
-        if cookie:
-            headers["Cookie"] = f".ROBLOSECURITY={cookie}"
-            
-        try:
-            async with session.get(url, headers=headers, allow_redirects=True) as response:
-                if response.status == 200:
-                    content_type = response.headers.get('Content-Type', '')
-                    if 'text/html' not in content_type.lower() and 'application/json' not in content_type.lower():
-                        logger.info(f"Asset {asset_id} - Sucesso ao recuperar a versao {version} que escapou da moderacao!")
-                        return url
-        except Exception as e:
-            logger.debug(f"Erro ao testar versao {version} do asset {asset_id}: {e}")
-            
-        await asyncio.sleep(0.5)
-        
-    return None
+async def download_core(session: aiohttp.ClientSession, asset_id: str, depth=0):
+    if depth > 2:
+        return None, "Profundidade maxima de sub-assets atingida."
 
-async def download_core(session: aiohttp.ClientSession, asset_id: str):
     details = await fetch_asset_details(session, asset_id)
     
     asset_name = str(asset_id)
@@ -473,55 +494,61 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
         return None, msg
 
     asset_url = None
+    is_thumbnail = False
 
-    if asset_type_id:
-        logger.info(f"Asset {asset_id} - Tentando obter URL de forma publica...")
-        asset_url = await fetch_asset_location(session, asset_id)
+    ids_to_try = [asset_id]
+    if asset_type_id == 13 or not asset_type_id:
+        for i in range(1, 6):
+            if int(asset_id) - i > 0:
+                ids_to_try.append(str(int(asset_id) - i))
+
+    for target_id in ids_to_try:
+        logger.info(f"Asset {asset_id} - Testando URL publica (Target ID: {target_id})...")
+        asset_url = await fetch_asset_location(session, target_id)
         
         if asset_url:
             logger.info(f"Asset {asset_id} - URL publica obtida com sucesso!")
+            break
         else:
-            logger.info(f"Asset {asset_id} - Acesso publico negado. Tentando fallback com PlaceIds e Cookie...")
+            logger.info(f"Asset {asset_id} - Acesso publico negado. Tentando fallback com PlaceIds e UniverseIds...")
             
             if creator_id:
-                place_ids = await fetch_creator_games(session, creator_id, creator_type)
-                if place_ids:
-                    for pid in place_ids:
-                        asset_url = await fetch_asset_location(session, asset_id, pid, ROBLOX_COOKIE)
+                experiences = await fetch_creator_games(session, creator_id, creator_type)
+                if experiences:
+                    for exp in experiences:
+                        asset_url = await fetch_asset_location(session, target_id, exp["placeId"], exp["universeId"], ROBLOX_COOKIE)
                         if asset_url:
-                            logger.info(f"Asset {asset_id} - URL obtida via fallback (PlaceID: {pid}).")
+                            logger.info(f"Asset {asset_id} - URL obtida via fallback (PlaceID: {exp['placeId']}, UniverseID: {exp['universeId']}).")
                             break
                 else:
                     logger.warning(f"Asset {asset_id} - Nenhuma experiencia encontrada para o criador.")
-            else:
-                logger.error(f"Asset {asset_id} - Nao foi possivel obter o criador do asset para o fallback.")
+            
+            if asset_url: break
 
-    if not asset_url:
-        logger.info(f"Asset {asset_id} - Tentando bypass de historico de versoes (forçado)...")
-        asset_url = await fetch_version_fallback(session, asset_id, ROBLOX_COOKIE)
+        if not asset_url:
+            logger.info(f"Asset {asset_id} - Tentando bypass profundo de historico de versoes...")
+            asset_url = await fetch_version_fallback(session, target_id, ROBLOX_COOKIE)
 
         if not asset_url and FALLBACK_GAMES:
-            logger.info(
-            f"Asset {asset_id} - Tentando {len(FALLBACK_GAMES)} jogos de fallback-games.txt..."
-            )
+            logger.info(f"Asset {asset_id} - Tentando {len(FALLBACK_GAMES)} jogos de fallback-games.txt...")
+            for place_id in FALLBACK_GAMES:
+                test_url = await fetch_asset_location(session, target_id, place_id, None, ROBLOX_COOKIE)
+                if test_url:
+                    asset_url = test_url
+                    logger.info(f"Asset {asset_id} - URL obtida via fallback-games.txt (PlaceID: {place_id})")
+                    break
 
-        for place_id in FALLBACK_GAMES:
-            test_url = await fetch_asset_location(
-                session,
-                asset_id,
-                place_id,
-                ROBLOX_COOKIE
-            )
-
-            if test_url:
-                asset_url = test_url
-                logger.info(
-                    f"Asset {asset_id} - URL obtida via fallback-games.txt (PlaceID: {place_id})"
-                )
-                break
+        if asset_url: break
 
     if not asset_url:
-        msg = f"Asset {asset_id} - URL de download inacessivel. O item provavelmente foi excluido permanentemente e não possui versões salvas."
+        logger.info(f"Asset {asset_id} - Todas as tentativas de binario falharam. Tentando recuperar Thumbnail...")
+        asset_url = await fetch_thumbnail_fallback(session, asset_id)
+        if asset_url:
+            is_thumbnail = True
+            logger.info(f"Asset {asset_id} - Thumbnail obtida com sucesso como ultimo recurso.")
+
+    if not asset_url:
+        msg = f"Asset {asset_id} - URL inacessivel. O item foi excluido permanentemente e não possui versoes salvos ou thumbnails."
         logger.error(msg)
         return None, msg
 
@@ -534,7 +561,7 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
                 return None, msg
 
             content_type = response.headers.get('Content-Type', '')
-            if 'text/html' in content_type.lower() or 'application/json' in content_type.lower():
+            if not is_thumbnail and ('text/html' in content_type.lower() or 'application/json' in content_type.lower()):
                 msg = f"Asset {asset_id} - Arquivo invalido retornado (HTML/JSON de erro)."
                 logger.error(msg)
                 return None, msg
@@ -547,10 +574,10 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
                 logger.error(msg)
                 return None, msg
 
-            final_ext = detect_file_extension(content, content_type, '.bin')
+            final_ext = '.png' if is_thumbnail else detect_file_extension(content, content_type, '.bin')
 
             logger.info(f"Content-Type: {content_type}")
-            logger.info(f"Extensão detectada: {final_ext}")
+            logger.info(f"Extensao detectada: {final_ext}")
 
             os.makedirs("downloaded_assets", exist_ok=True)
             file_path = os.path.join("downloaded_assets", f"{asset_id}_{sanitized_name}{final_ext}")
@@ -559,13 +586,32 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
                 f.write(content)
             
             if final_ext == '.m3u8':
-                logger.info(f"Asset {asset_id} - Playlist HLS detectada. Iniciando reconstrução...")
+                logger.info(f"Asset {asset_id} - Playlist HLS detectada. Iniciando reconstrucao...")
                 hls_webm_path = await process_hls_playlist(session, file_path, asset_url)
                 if not hls_webm_path:
                     msg = f"Asset {asset_id} - Falha ao reconstruir video HLS."
                     logger.error(msg)
                     return None, msg
                 file_path = hls_webm_path
+
+            if final_ext == '.rbxmx':
+                logger.info(f"Asset {asset_id} - Arquivo XML detectado. Inspecionando por sub-assets na CDN...")
+                try:
+                    with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        xml_content = f.read()
+                    match = re.search(r'rbxassetid://(\d+)', xml_content)
+                    if match:
+                        sub_id = match.group(1)
+                        logger.info(f"Asset {asset_id} - Sub-asset {sub_id} encontrado. Baixando recurso interno...")
+                        sub_path, sub_err = await download_core(session, sub_id, depth + 1)
+                        if sub_path:
+                            try:
+                                os.remove(file_path)
+                            except Exception:
+                                pass
+                            return sub_path, None
+                except Exception as e:
+                    logger.error(f"Asset {asset_id} - Falha ao ler XML para sub-assets: {e}")
                 
             logger.info(f"Sucesso: {file_path}")
             return file_path, None
