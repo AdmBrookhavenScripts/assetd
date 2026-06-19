@@ -7,6 +7,7 @@ import os
 import zipfile
 import uuid
 import logging
+import time
 from urllib.parse import urljoin, urlparse, urlunparse
 from colorama import init, Fore, Style
 
@@ -84,7 +85,24 @@ async def upload_gofile(file_path: str):
                     if response.status == 200:
                         result = await response.json()
                         if result.get("status") == "ok":
-                            return result["data"]["downloadPage"]
+                            download_page = result["data"]["downloadPage"]
+                            file_id = result["data"].get("fileId")
+                            token = GOFILE_TOKEN or result["data"].get("guestToken")
+                            
+                            if file_id and token:
+                                expiry_timestamp = int(time.time()) + 86400 
+                                update_url = f"https://api.gofile.io/contents/{file_id}/update"
+                                update_data = {
+                                    "token": token,
+                                    "attribute": "expiry",
+                                    "attributeValue": str(expiry_timestamp)
+                                }
+                                try:
+                                    await session.put(update_url, data=update_data)
+                                except Exception as e:
+                                    logger.warning(f"Aviso: Não foi possível definir a expiração de 24h: {e}")
+                                    
+                            return download_page
                         else:
                             return f"Erro: {result.get('status')}"
                     else:
