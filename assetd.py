@@ -328,6 +328,8 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         }
+        if ROBLOX_COOKIE:
+            headers["Cookie"] = f".ROBLOSECURITY={ROBLOX_COOKIE}"
 
         if not best_playlist_url:
             best_playlist_url = base_url
