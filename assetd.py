@@ -320,8 +320,7 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
             parsed_master = urlparse(master_url)
             
             if not urlparse(target_path).query:
-                if parsed_joined.netloc == parsed_master.netloc:
-                    joined = urlunparse(parsed_joined._replace(query=parsed_master.query))
+                joined = urlunparse(parsed_joined._replace(query=parsed_master.query))
                 
             return joined
 
@@ -334,10 +333,11 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
             internal_m3u8_content = m3u8_content
         else:
             if "{$RBX-BASE-URI}" in best_playlist_url and rbx_base_uri:
-                best_playlist_url = best_playlist_url.replace(
+                replaced_url = best_playlist_url.replace(
                     "{$RBX-BASE-URI}",
                     rbx_base_uri.rstrip("/")
                 )
+                best_playlist_url = get_url_with_auth(replaced_url, "", base_url)
             else:
                 best_playlist_url = get_url_with_auth(
                     base_url,
