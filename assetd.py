@@ -804,35 +804,45 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
             errors.append(f"Exceção severa: {str(res)}")
 
     ptask.cancel()
-    await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"**🕣 Processando... {state['total']}/{state['total']} Assets\n`🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩`\n\nTempo estimado: 0s**", color=0x335fff))
+    
+    try:
+        await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"**🕣 Processando... {state['total']}/{state['total']} Assets\n`🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩`\n\nTempo estimado: 0s**", color=0x335fff))
+    except Exception:
+        pass
 
     if not downloaded_files:
         err_msg = "\n".join(errors)[:1800]
-        await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"Falha total no lote. Nenhum arquivo foi salvo.\nErros:\n{err_msg}", color=0x335fff))
+        try:
+            await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"Falha total no lote. Nenhum arquivo foi salvo.\nErros:\n{err_msg}", color=0x335fff))
+        except Exception:
+            await interaction.channel.send(embed=discord.Embed(description=f"Falha total no lote. Nenhum arquivo foi salvo.\nErros:\n{err_msg}", color=0x335fff))
         return
 
     has_a = any(f.endswith('.ogg') for f in downloaded_files)
     has_v = any(f.endswith('.webm') for f in downloaded_files)
 
-    if has_a or has_v:
-        view = MediaFormatView(has_a, has_v)
-        await interaction.edit_original_response(content=None, embed=discord.Embed(description="Mídias detectadas no lote! Selecione os formatos e qualidades:", color=0x335fff), view=view)
-        await view.wait()
-        
-        if view.confirmed:
-            new_files = []
-            for f in downloaded_files:
-                if f.endswith('.ogg'):
-                    f = await convert_media(f, view.audio_fmt, view.audio_quality)
-                elif f.endswith('.webm'):
-                    f = await convert_media(f, view.video_fmt, view.video_quality)
-                new_files.append(f)
-            downloaded_files = new_files
-            await interaction.edit_original_response(content=None, embed=discord.Embed(description="Criando ZIP...", color=0x335fff), view=None)
+    try:
+        if has_a or has_v:
+            view = MediaFormatView(has_a, has_v)
+            await interaction.edit_original_response(content=None, embed=discord.Embed(description="Mídias detectadas no lote! Selecione os formatos e qualidades:", color=0x335fff), view=view)
+            await view.wait()
+            
+            if view.confirmed:
+                new_files = []
+                for f in downloaded_files:
+                    if f.endswith('.ogg'):
+                        f = await convert_media(f, view.audio_fmt, view.audio_quality)
+                    elif f.endswith('.webm'):
+                        f = await convert_media(f, view.video_fmt, view.video_quality)
+                    new_files.append(f)
+                downloaded_files = new_files
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description="Criando ZIP...", color=0x335fff), view=None)
+            else:
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description="Tempo esgotado. Mantendo os arquivos originais e criando ZIP...", color=0x335fff), view=None)
         else:
-            await interaction.edit_original_response(content=None, embed=discord.Embed(description="Tempo esgotado. Mantendo os arquivos originais e criando ZIP...", color=0x335fff), view=None)
-    else:
-        await interaction.edit_original_response(content=None, embed=discord.Embed(description="Criando ZIP...", color=0x335fff))
+            await interaction.edit_original_response(content=None, embed=discord.Embed(description="Criando ZIP...", color=0x335fff))
+    except discord.errors.HTTPException:
+        pass
 
     zip_filename = f"batch_{uuid.uuid4().hex[:8]}.zip"
     
@@ -842,7 +852,20 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
                 if os.path.exists(file):
                     zipf.write(file, os.path.basename(file))
                     
-    await asyncio.to_thread(create_zip)
+    try:
+        await asyncio.to_thread(create_zip)
+    except Exception as e:
+        try:
+            await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"**❌ Erro interno ao criar o ZIP:** {e}", color=0x335fff))
+        except Exception:
+            await interaction.channel.send(embed=discord.Embed(description=f"**❌ Erro interno ao criar o ZIP:** {e}", color=0x335fff))
+        for file in downloaded_files:
+            try:
+                if os.path.exists(file):
+                    os.remove(file)
+            except Exception:
+                pass
+        return
 
     final_msg = f"**☑️ Lote concluido: {len(downloaded_files)} arquivos processados.**"
     if failed_ids:
@@ -853,18 +876,31 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
         else:
             final_msg += ", ".join(f"`{i}`" for i in failed_ids)
 
-    if os.path.exists(zip_filename):
-        if os.path.getsize(zip_filename) > 10 * 1024 * 1024:
-            await interaction.edit_original_response(content=None, embed=discord.Embed(description="O arquivo ZIP final excede o limite de 10MB do Discord. Enviando para o Litterbox...", color=0x335fff))
-            litterbox_url = await upload_litterbox(zip_filename)
-            await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"{final_msg}\n\nO arquivo ZIP excedeu o limite de 10MB do Discord. Link do Litterbox: {litterbox_url}", color=0x335fff))
+    try:
+        if os.path.exists(zip_filename):
+            if os.path.getsize(zip_filename) > 10 * 1024 * 1024:
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description="O arquivo ZIP final excede o limite de 10MB do Discord. Enviando para o Litterbox...", color=0x335fff))
+                litterbox_url = await upload_litterbox(zip_filename)
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"{final_msg}\n\nO arquivo ZIP excedeu o limite de 10MB do Discord. Link do Litterbox: {litterbox_url}", color=0x335fff))
+            else:
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description=final_msg, color=0x335fff), attachments=[discord.File(zip_filename)])
         else:
-            await interaction.edit_original_response(content=None, embed=discord.Embed(description=final_msg, color=0x335fff), attachments=[discord.File(zip_filename)])
-            
-        try:
+            await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"{final_msg}\n\n**❌ Erro:** O arquivo ZIP falhou ao ser salvo no disco.", color=0x335fff))
+    except discord.errors.HTTPException:
+        if os.path.exists(zip_filename):
+            if os.path.getsize(zip_filename) > 10 * 1024 * 1024:
+                litterbox_url = await upload_litterbox(zip_filename)
+                await interaction.channel.send(content=None, embed=discord.Embed(description=f"{final_msg}\n\nO arquivo ZIP excedeu o limite de 10MB do Discord. Link do Litterbox: {litterbox_url}", color=0x335fff))
+            else:
+                await interaction.channel.send(content=None, embed=discord.Embed(description=final_msg, color=0x335fff), file=discord.File(zip_filename))
+        else:
+            await interaction.channel.send(embed=discord.Embed(description=f"{final_msg}\n\n**❌ Erro:** O arquivo ZIP falhou ao ser salvo no disco.", color=0x335fff))
+
+    try:
+        if os.path.exists(zip_filename):
             os.remove(zip_filename)
-        except Exception:
-            pass
+    except Exception:
+        pass
 
     for file in downloaded_files:
         try:
