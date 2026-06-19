@@ -639,7 +639,7 @@ class ConfirmButton(discord.ui.Button):
         self.view.confirmed = True
         for child in self.view.children:
             child.disabled = True
-        await interaction.response.edit_message(content=None, embed=discord.Embed(description="**Processando conversão...**", color=0x335fff), view=self.view)
+        await interaction.response.edit_message(content=None, embed=discord.Embed(description="**🕣 Processando conversão...**", color=0x335fff), view=self.view)
         self.view.stop()
 
 class MediaFormatView(discord.ui.View):
