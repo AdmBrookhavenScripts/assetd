@@ -57,30 +57,12 @@ def load_fallback_games():
 
 FALLBACK_GAMES = load_fallback_games()
 
-ASSET_TYPES = {
-    1: ("Image", ".png"), 2: ("TShirt", ".png"), 3: ("Audio", ".ogg"),
-    4: ("Mesh", ".mesh"), 8: ("Hat", ".rbxm"), 10: ("Model", ".rbxm"),
-    11: ("Shirt", ".png"), 12: ("Pants", ".png"), 13: ("Decal", ".png"),
-    17: ("Head", ".rbxm"), 18: ("Face", ".png"), 19: ("Gear", ".rbxm"),
-    21: ("Badge", ".png"), 24: ("Animation", ".rbxm"), 27: ("Torso", ".rbxm"),
-    28: ("RightArm", ".rbxm"), 29: ("LeftArm", ".rbxm"), 32: ("Package", ".rbxm"),
-    34: ("GamePass", ".png"), 38: ("Plugin", ".rbxm"), 40: ("MeshPart", ".mesh"),
-    41: ("HairAccessory", ".rbxm"), 42: ("FaceAccessory", ".rbxm"), 43: ("NeckAccessory", ".rbxm"),
-    44: ("ShoulderAccessory", ".rbxm"), 45: ("FrontAccessory", ".rbxm"), 46: ("BackAccessory", ".rbxm"),
-    47: ("WaistAccessory", ".rbxm"), 57: ("EarAccessory", ".rbxm"), 58: ("EyeAccessory", ".rbxm"),
-    61: ("EmoteAnimation", ".rbxm"), 62: ("Video", ".webm"), 64: ("TShirtAccessory", ".rbxm"),
-    65: ("ShirtAccessory", ".rbxm"), 66: ("PantsAccessory", ".rbxm"), 67: ("JacketAccessory", ".rbxm"),
-    68: ("SweaterAccessory", ".rbxm"), 69: ("ShortsAccessory", ".rbxm"), 70: ("DressSkirtAccessory", ".rbxm"),
-    73: ("FontFamily", ".json"), 76: ("EyebrowAccessory", ".rbxm"), 77: ("EyelashAccessory", ".rbxm"),
-    79: ("DynamicHead", ".rbxm")
-}
-
 NO_BINARY_TYPES = [21, 34]
 
 async def upload_litterbox(file_path: str, expire="72h"):
     url = "https://litterbox.catbox.moe/resources/internals/api.php"
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=300)) as session:
             with open(file_path, 'rb') as f:
                 data = aiohttp.FormData()
                 data.add_field('reqtype', 'fileupload')
@@ -124,7 +106,7 @@ def detect_file_extension(content: bytes, content_type: str, fallback_ext: str) 
     return fallback_ext
 
 async def fetch_creator_games(session: aiohttp.ClientSession, creator_id: int, creator_type: str):
-    place_ids = []
+    games_info = []
     url = f"https://games.roproxy.com/v2/groups/{creator_id}/games?accessFilter=2&sortOrder=Asc&limit=50" if creator_type == "Group" else f"https://games.roproxy.com/v2/users/{creator_id}/games?accessFilter=2&sortOrder=Asc&limit=50"
     
     try:
@@ -132,11 +114,13 @@ async def fetch_creator_games(session: aiohttp.ClientSession, creator_id: int, c
             if response.status == 200:
                 data = await response.json()
                 for game in data.get("data", []):
-                    if "rootPlace" in game and "id" in game["rootPlace"]:
-                        place_ids.append(game["rootPlace"]["id"])
+                    pid = game["rootPlace"]["id"] if "rootPlace" in game and "id" in game["rootPlace"] else None
+                    uid = game.get("id")
+                    if pid or uid:
+                        games_info.append({"place_id": pid, "universe_id": uid})
     except Exception as e:
         logger.warning(f"Falha ao buscar experiencias do criador {creator_id}: {e}")
-    return place_ids
+    return games_info
 
 async def fetch_asset_details(session: aiohttp.ClientSession, asset_id: str, max_retries=10):
     url = f"https://economy.roproxy.com/v2/assets/{asset_id}/details"
@@ -156,11 +140,10 @@ async def fetch_asset_details(session: aiohttp.ClientSession, asset_id: str, max
             await asyncio.sleep(0.5)
     return None
 
-async def fetch_asset_location(session: aiohttp.ClientSession, asset_id: str, asset_type: str, place_id=None, cookie=None):
+async def fetch_asset_location(session: aiohttp.ClientSession, asset_id: str, place_id=None, cookie=None, universe_id=None):
     url = 'https://assetdelivery.roproxy.com/v2/assets/batch'
     body_array = [{
         "assetId": asset_id,
-        "assetType": asset_type,
         "requestId": "0"
     }]
     
@@ -175,6 +158,8 @@ async def fetch_asset_location(session: aiohttp.ClientSession, asset_id: str, as
         headers["Cookie"] = f".ROBLOSECURITY={cookie}"
     if place_id:
         headers["Roblox-Place-Id"] = str(place_id)
+    if universe_id:
+        headers["Roblox-Universe-Id"] = str(universe_id)
 
     try:
         async with session.post(url, headers=headers, json=body_array) as response:
@@ -185,41 +170,51 @@ async def fetch_asset_location(session: aiohttp.ClientSession, asset_id: str, as
                     if obj.get("locations") and obj["locations"][0].get("location"):
                         return obj["locations"][0]["location"]
     except Exception as e:
-        logger.debug(f"Erro ao buscar localizacao do asset {asset_id} (Place: {place_id}): {e}")
+        logger.debug(f"Erro ao buscar localizacao do asset {asset_id} (Place: {place_id}, Universe: {universe_id}): {e}")
     return None
 
 def sanitize_filename(name: str) -> str:
     sanitized = re.sub(r'[\\/*?"<>|]', '', name)
     return sanitized.replace(" ", "_")
 
-async def convert_media(input_path: str, format: str) -> str:
-    if not format or input_path.endswith(format):
+async def convert_media(input_path: str, format: str, quality: str) -> str:
+    if not format or (input_path.endswith(format) and quality == 'original'):
         return input_path
 
     input_dir = os.path.dirname(input_path) or '.'
     input_name = os.path.basename(input_path)
-    output_name = input_name.rsplit('.', 1)[0] + format
-    output_path = os.path.join(input_dir, output_name)
+    temp_output_name = input_name.rsplit('.', 1)[0] + "_mod" + format
+    temp_output_path = os.path.join(input_dir, temp_output_name)
 
-    if format == '.mp3':
-        cmd = [
-            'ffmpeg', '-y', '-i', input_name,
-            '-c:a', 'libmp3lame', '-q:a', '2',
-            output_name
-        ]
-    elif format == '.wav':
-        cmd = [
-            'ffmpeg', '-y', '-i', input_name,
-            '-c:a', 'pcm_s16le',
-            output_name
-        ]
-    elif format in ['.mp4', '.mov']:
-        cmd = [
-            'ffmpeg', '-y', '-i', input_name,
-            output_name
-        ]
+    cmd = ['ffmpeg', '-y', '-i', input_name]
+
+    is_audio = format in ['.mp3', '.wav', '.ogg']
+    if is_audio:
+        if format == '.mp3':
+            cmd.extend(['-c:a', 'libmp3lame'])
+        elif format == '.wav':
+            cmd.extend(['-c:a', 'pcm_s16le'])
+        elif format == '.ogg':
+            cmd.extend(['-c:a', 'libvorbis'])
+
+        if quality == 'high':
+            cmd.extend(['-b:a', '320k'])
+        elif quality == 'medium':
+            cmd.extend(['-b:a', '192k'])
+        elif quality == 'low':
+            cmd.extend(['-b:a', '128k'])
+        elif quality == 'original' and format == '.mp3':
+            cmd.extend(['-q:a', '2'])
     else:
-        return input_path
+        if format in ['.mp4', '.mov', '.webm']:
+            if quality == '1080p':
+                cmd.extend(['-vf', 'scale=-2:1080'])
+            elif quality == '720p':
+                cmd.extend(['-vf', 'scale=-2:720'])
+            elif quality == '480p':
+                cmd.extend(['-vf', 'scale=-2:480'])
+
+    cmd.append(temp_output_name)
 
     try:
         process = await asyncio.create_subprocess_exec(
@@ -229,7 +224,15 @@ async def convert_media(input_path: str, format: str) -> str:
             cwd=os.path.abspath(input_dir)
         )
 
-        stdout, stderr = await process.communicate()
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=300)
+        except asyncio.TimeoutError:
+            try:
+                process.kill()
+            except Exception:
+                pass
+            logger.error(f"FFmpeg timeout para {input_path}")
+            return input_path
 
         if stdout:
             logger.info(stdout.decode(errors="ignore"))
@@ -242,13 +245,14 @@ async def convert_media(input_path: str, format: str) -> str:
         if process.returncode != 0:
             return input_path
 
-        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+        if os.path.exists(temp_output_path) and os.path.getsize(temp_output_path) > 0:
             try:
                 os.remove(input_path)
+                final_output_path = os.path.join(input_dir, input_name.rsplit('.', 1)[0] + format)
+                os.rename(temp_output_path, final_output_path)
+                return final_output_path
             except Exception:
-                pass
-
-            return output_path
+                return temp_output_path
 
     except Exception as e:
         logger.error(f"Erro no FFmpeg: {e}")
@@ -407,7 +411,16 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
             stderr=asyncio.subprocess.PIPE,
             cwd=os.path.abspath(output_dir)
         )
-        stdout, stderr = await process.communicate()
+        
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=600)
+        except asyncio.TimeoutError:
+            try:
+                process.kill()
+            except Exception:
+                pass
+            logger.error("FFmpeg concatenação timeout.")
+            return None
         
         if process.returncode != 0:
             logger.error("Falha na reconstrução HLS.")
@@ -462,8 +475,6 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
     asset_type_id = None
     creator_id = None
     creator_type = None
-    target_asset_type_str = "Unknown"
-    expected_extension = ".bin"
 
     if details and "errors" not in details:
         asset_name = details.get("Name", str(asset_id))
@@ -471,18 +482,14 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
         creator = details.get("Creator", {})
         creator_id = creator.get("CreatorTargetId")
         creator_type = creator.get("CreatorType")
-        
-        type_info = ASSET_TYPES.get(asset_type_id, ("Model", ".bin"))
-        target_asset_type_str = type_info[0]
-        expected_extension = type_info[1]
     else:
         logger.warning(f"Asset {asset_id} - Detalhes negados (provavelmente moderado). Forcando bypass direto...")
 
     sanitized_name = sanitize_filename(asset_name)
-    logger.info(f"Processando Asset {asset_id} | Nome: {sanitized_name} | TypeID: {asset_type_id} ({target_asset_type_str})")
+    logger.info(f"Processando Asset {asset_id} | Nome: {sanitized_name} | TypeID: {asset_type_id}")
 
     if asset_type_id in NO_BINARY_TYPES:
-        msg = f"Asset {asset_id} e do tipo sem arquivo binario ({target_asset_type_str})."
+        msg = f"Asset {asset_id} e do tipo sem arquivo binario."
         logger.warning(msg)
         return None, msg
 
@@ -490,21 +497,27 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
 
     if asset_type_id:
         logger.info(f"Asset {asset_id} - Tentando obter URL de forma publica...")
-        asset_url = await fetch_asset_location(session, asset_id, target_asset_type_str)
+        asset_url = await fetch_asset_location(session, asset_id)
         
         if asset_url:
             logger.info(f"Asset {asset_id} - URL publica obtida com sucesso!")
         else:
-            logger.info(f"Asset {asset_id} - Acesso publico negado. Tentando fallback com PlaceIds e Cookie...")
+            logger.info(f"Asset {asset_id} - Acesso publico negado. Tentando fallback com PlaceIds/UniverseIds e Cookie...")
             
             if creator_id:
-                place_ids = await fetch_creator_games(session, creator_id, creator_type)
-                if place_ids:
-                    for pid in place_ids:
-                        asset_url = await fetch_asset_location(session, asset_id, target_asset_type_str, pid, ROBLOX_COOKIE)
-                        if asset_url:
-                            logger.info(f"Asset {asset_id} - URL obtida via fallback (PlaceID: {pid}).")
-                            break
+                games_info = await fetch_creator_games(session, creator_id, creator_type)
+                if games_info:
+                    for g in games_info:
+                        if g.get("place_id"):
+                            asset_url = await fetch_asset_location(session, asset_id, g["place_id"], ROBLOX_COOKIE)
+                            if asset_url:
+                                logger.info(f"Asset {asset_id} - URL obtida via fallback (PlaceID: {g['place_id']}).")
+                                break
+                        if g.get("universe_id"):
+                            asset_url = await fetch_asset_location(session, asset_id, None, ROBLOX_COOKIE, g["universe_id"])
+                            if asset_url:
+                                logger.info(f"Asset {asset_id} - URL obtida via fallback (UniverseID: {g['universe_id']}).")
+                                break
                 else:
                     logger.warning(f"Asset {asset_id} - Nenhuma experiencia encontrada para o criador.")
             else:
@@ -523,7 +536,6 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
             test_url = await fetch_asset_location(
                 session,
                 asset_id,
-                target_asset_type_str,
                 place_id,
                 ROBLOX_COOKIE
             )
@@ -562,7 +574,7 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
                 logger.error(msg)
                 return None, msg
 
-            final_ext = detect_file_extension(content, content_type, expected_extension)
+            final_ext = detect_file_extension(content, content_type, '.bin')
 
             logger.info(f"Content-Type: {content_type}")
             logger.info(f"Extensão detectada: {final_ext}")
@@ -608,6 +620,34 @@ class FormatButton(discord.ui.Button):
                 
         await interaction.response.edit_message(view=self.view)
 
+class QualitySelect(discord.ui.Select):
+    def __init__(self, is_audio: bool, row: int):
+        self.is_audio = is_audio
+        if is_audio:
+            options = [
+                discord.SelectOption(label="Original", value="original", description="Qualidade original"),
+                discord.SelectOption(label="Alta", value="high", description="320kbps"),
+                discord.SelectOption(label="Média", value="medium", description="192kbps"),
+                discord.SelectOption(label="Baixa", value="low", description="128kbps"),
+            ]
+            placeholder = "Selecione a Qualidade de Áudio"
+        else:
+            options = [
+                discord.SelectOption(label="Original", value="original", description="Resolução original"),
+                discord.SelectOption(label="1080p", value="1080p"),
+                discord.SelectOption(label="720p", value="720p"),
+                discord.SelectOption(label="480p", value="480p"),
+            ]
+            placeholder = "Selecione a Qualidade de Vídeo"
+        super().__init__(placeholder=placeholder, min_values=1, max_values=1, options=options, row=row)
+
+    async def callback(self, interaction: discord.Interaction):
+        if self.is_audio:
+            self.view.audio_quality = self.values[0]
+        else:
+            self.view.video_quality = self.values[0]
+        await interaction.response.defer()
+
 class ConfirmButton(discord.ui.Button):
     def __init__(self, row: int):
         super().__init__(label="Confirmar e Processar", style=discord.ButtonStyle.success, row=row)
@@ -616,7 +656,7 @@ class ConfirmButton(discord.ui.Button):
         self.view.confirmed = True
         for child in self.view.children:
             child.disabled = True
-        await interaction.response.edit_message(content="Processando conversão (FFmpeg)...", view=self.view)
+        await interaction.response.edit_message(content=None, embed=discord.Embed(description="**🕣 Processando conversão...**", color=0x335fff), view=self.view)
         self.view.stop()
 
 class MediaFormatView(discord.ui.View):
@@ -624,6 +664,8 @@ class MediaFormatView(discord.ui.View):
         super().__init__(timeout=120)
         self.audio_fmt = '.ogg'
         self.video_fmt = '.webm'
+        self.audio_quality = 'original'
+        self.video_quality = 'original'
         self.confirmed = False
         
         row_idx = 0
@@ -637,6 +679,14 @@ class MediaFormatView(discord.ui.View):
             self.add_item(FormatButton("MP4", ".mp4", row=row_idx, is_audio=False))
             self.add_item(FormatButton("MOV", ".mov", row=row_idx, is_audio=False))
             self.add_item(FormatButton("WEBM (Original)", ".webm", row=row_idx, is_audio=False, style=discord.ButtonStyle.primary))
+            row_idx += 1
+
+        if has_audio:
+            self.add_item(QualitySelect(is_audio=True, row=row_idx))
+            row_idx += 1
+
+        if has_video:
+            self.add_item(QualitySelect(is_audio=False, row=row_idx))
             row_idx += 1
             
         self.add_item(ConfirmButton(row=row_idx))
@@ -653,11 +703,30 @@ client = RobloxAssetBot()
 
 @client.tree.command(name="asset", description="Baixa um unico asset do Roblox de forma segura")
 async def asset(interaction: discord.Interaction, asset_id: str):
-    await interaction.response.defer()
+    state = {"current": 0, "total": 1}
+    await interaction.response.send_message(embed=discord.Embed(description=f"**🕣 Processando... {state['current']}/{state['total']} Assets\n`🟩⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️`\n\nTempo estimado: 9s**", color=0x335fff))
+    
+    async def progress_task():
+        try:
+            i = 1
+            while i < 10:
+                await asyncio.sleep(1)
+                i += 1
+                desc = f"**🕣 Processando... {state['current']}/{state['total']} Assets\n`{'🟩' * i}{'⬜️' * (10 - i)}`\n\nTempo estimado: {10 - i}s**"
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description=desc, color=0x335fff))
+        except asyncio.CancelledError:
+            pass
+
+    ptask = asyncio.create_task(progress_task())
+    
     clean_id = asset_id.strip()
     
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=600)) as session:
         file_path, error = await download_core(session, clean_id)
+        state["current"] = 1
+        
+    ptask.cancel()
+    await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"**🕣 Processando... {state['total']}/{state['total']} Assets\n`🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩`\n\nTempo estimado: 0s**", color=0x335fff))
         
     if file_path and os.path.exists(file_path):
         has_a = file_path.endswith('.ogg')
@@ -665,26 +734,27 @@ async def asset(interaction: discord.Interaction, asset_id: str):
         
         if has_a or has_v:
             view = MediaFormatView(has_a, has_v)
-            msg = await interaction.followup.send("Mídia detectada! Selecione o formato desejado:", view=view)
+            await interaction.edit_original_response(content=None, embed=discord.Embed(description="Mídia detectada! Selecione os formatos e qualidades:", color=0x335fff), view=view)
             await view.wait()
             
             if view.confirmed:
                 fmt = view.audio_fmt if has_a else view.video_fmt
-                file_path = await convert_media(file_path, fmt)
+                qual = view.audio_quality if has_a else view.video_quality
+                file_path = await convert_media(file_path, fmt, qual)
             
             if os.path.getsize(file_path) > 10 * 1024 * 1024:
-                await msg.edit(content="O arquivo convertido excede o limite de 10MB do Discord. Enviando para o Litterbox...", view=None)
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description="O arquivo convertido excede o limite de 10MB do Discord. Enviando para o Litterbox...", color=0x335fff), view=None)
                 litterbox_url = await upload_litterbox(file_path)
-                await msg.edit(content=f"O arquivo excedeu o limite de 10MB do Discord. Link do Litterbox: {litterbox_url}", view=None)
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"O arquivo excedeu o limite de 10MB do Discord. Link do Litterbox: {litterbox_url}", color=0x335fff), view=None)
             else:
-                await msg.edit(content="Concluído!", attachments=[discord.File(file_path)], view=None)
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description="**☑️ Concluído!**", color=0x335fff), attachments=[discord.File(file_path)], view=None)
         else:
             if os.path.getsize(file_path) > 10 * 1024 * 1024:
-                msg = await interaction.followup.send("O arquivo excede o limite de 10MB do Discord. Enviando para o Litterbox...")
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description="O arquivo excede o limite de 10MB do Discord. Enviando para o Litterbox...", color=0x335fff))
                 litterbox_url = await upload_litterbox(file_path)
-                await msg.edit(content=f"O arquivo excedeu o limite de 10MB do Discord. Link do Litterbox: {litterbox_url}")
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"O arquivo excedeu o limite de 10MB do Discord. Link do Litterbox: {litterbox_url}", color=0x335fff))
             else:
-                await interaction.followup.send(file=discord.File(file_path))
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description="**☑️ Concluído!**", color=0x335fff), attachments=[discord.File(file_path)])
                 
         try:
             if os.path.exists(file_path):
@@ -692,62 +762,104 @@ async def asset(interaction: discord.Interaction, asset_id: str):
         except Exception:
             pass
     else:
-        await interaction.followup.send(f"Erro: {error}")
+        await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"**❌️ Erro:** {error}", color=0x335fff))
 
 @client.tree.command(name="assetbatch", description="Baixa multiplos assets e retorna um arquivo ZIP limpo")
 async def assetbatch(interaction: discord.Interaction, asset_ids: str):
-    await interaction.response.defer()
-    ids_list = [x.strip() for x in asset_ids.split(',') if x.strip()]
-    
+    raw_ids = [x.strip() for x in asset_ids.split(',') if x.strip()]
+    ids_list = []
+    for x in raw_ids:
+        if x not in ids_list:
+            ids_list.append(x)
+            
     if len(ids_list) > 20:
-        await interaction.followup.send("Por favor, limite a 20 assets por lote para evitar sobrecarga.")
+        await interaction.response.send_message(embed=discord.Embed(description="Por favor, limite a 20 assets por lote para evitar sobrecarga.", color=0x335fff))
         return
+
+    state = {"current": 0, "total": len(ids_list)}
+    await interaction.response.send_message(embed=discord.Embed(description=f"**🕣 Processando... 0/{state['total']} Assets\n`🟩⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️`\n\nTempo estimado: 13s**", color=0x335fff))
+    
+    async def progress_task():
+        try:
+            i = 1
+            while i < 10:
+                await asyncio.sleep(1.5)
+                i += 1
+                est = max(1, int((10 - i) * 1.5))
+                desc = f"**🕣 Processando... {state['current']}/{state['total']} Assets\n`{'🟩' * i}{'⬜️' * (10 - i)}`\n\nTempo estimado: {est}s**"
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description=desc, color=0x335fff))
+        except asyncio.CancelledError:
+            pass
+
+    ptask = asyncio.create_task(progress_task())
 
     downloaded_files = []
     errors = []
+    failed_ids = []
 
-    async with aiohttp.ClientSession() as session:
-        tasks = [download_core(session, aid) for aid in ids_list]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=600)) as session:
+        results = []
+        for aid in ids_list:
+            try:
+                res = await download_core(session, aid)
+                results.append(res)
+            except Exception as e:
+                results.append(e)
+            state["current"] += 1
 
-    for res in results:
+    for aid, res in zip(ids_list, results):
         if isinstance(res, tuple):
             path, err = res
             if path:
                 downloaded_files.append(path)
-            elif err:
-                errors.append(err)
+            else:
+                failed_ids.append(aid)
+                if err:
+                    errors.append(err)
         else:
-            errors.append(f"Excecao severa: {str(res)}")
+            failed_ids.append(aid)
+            errors.append(f"Exceção severa: {str(res)}")
+
+    ptask.cancel()
+    
+    try:
+        await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"**🕣 Processando... {state['total']}/{state['total']} Assets\n`🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩`\n\nTempo estimado: 0s**", color=0x335fff))
+    except Exception:
+        pass
 
     if not downloaded_files:
         err_msg = "\n".join(errors)[:1800]
-        await interaction.followup.send(f"Falha total no lote. Nenhum arquivo foi salvo.\nErros:\n{err_msg}")
+        try:
+            await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"Falha total no lote. Nenhum arquivo foi salvo.\nErros:\n{err_msg}", color=0x335fff))
+        except Exception:
+            await interaction.channel.send(embed=discord.Embed(description=f"Falha total no lote. Nenhum arquivo foi salvo.\nErros:\n{err_msg}", color=0x335fff))
         return
 
     has_a = any(f.endswith('.ogg') for f in downloaded_files)
     has_v = any(f.endswith('.webm') for f in downloaded_files)
-    msg = None
 
-    if has_a or has_v:
-        view = MediaFormatView(has_a, has_v)
-        msg = await interaction.followup.send("Mídias detectadas no lote! Selecione os formatos:", view=view)
-        await view.wait()
-        
-        if view.confirmed:
-            new_files = []
-            for f in downloaded_files:
-                if f.endswith('.ogg'):
-                    f = await convert_media(f, view.audio_fmt)
-                elif f.endswith('.webm'):
-                    f = await convert_media(f, view.video_fmt)
-                new_files.append(f)
-            downloaded_files = new_files
-            await msg.edit(content="Criando ZIP...", view=None)
+    try:
+        if has_a or has_v:
+            view = MediaFormatView(has_a, has_v)
+            await interaction.edit_original_response(content=None, embed=discord.Embed(description="Mídias detectadas no lote! Selecione os formatos e qualidades:", color=0x335fff), view=view)
+            await view.wait()
+            
+            if view.confirmed:
+                new_files = []
+                for f in downloaded_files:
+                    if f.endswith('.ogg'):
+                        f = await convert_media(f, view.audio_fmt, view.audio_quality)
+                    elif f.endswith('.webm'):
+                        f = await convert_media(f, view.video_fmt, view.video_quality)
+                    new_files.append(f)
+                downloaded_files = new_files
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description="Criando ZIP...", color=0x335fff), view=None)
+            else:
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description="Tempo esgotado. Mantendo os arquivos originais e criando ZIP...", color=0x335fff), view=None)
         else:
-            await msg.edit(content="Tempo esgotado. Mantendo os arquivos originais e criando ZIP...", view=None)
-    else:
-        msg = await interaction.followup.send("Criando ZIP...")
+            await interaction.edit_original_response(content=None, embed=discord.Embed(description="Criando ZIP...", color=0x335fff))
+    except discord.errors.HTTPException:
+        pass
 
     zip_filename = f"batch_{uuid.uuid4().hex[:8]}.zip"
     
@@ -757,24 +869,55 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
                 if os.path.exists(file):
                     zipf.write(file, os.path.basename(file))
                     
-    await asyncio.to_thread(create_zip)
-
-    final_msg = f"Lote concluido: {len(downloaded_files)} arquivos processados."
-    if errors:
-        final_msg += f"\nFalhas ({len(errors)}): verifique os logs internos."
-
-    if os.path.exists(zip_filename):
-        if os.path.getsize(zip_filename) > 10 * 1024 * 1024:
-            await msg.edit(content="O arquivo ZIP final excede o limite de 10MB do Discord. Enviando para o Litterbox...")
-            litterbox_url = await upload_litterbox(zip_filename)
-            await msg.edit(content=f"{final_msg}\n\nO arquivo ZIP excedeu o limite de 10MB do Discord. Link do Litterbox: {litterbox_url}")
-        else:
-            await msg.edit(content=final_msg, attachments=[discord.File(zip_filename)])
-            
+    try:
+        await asyncio.to_thread(create_zip)
+    except Exception as e:
         try:
-            os.remove(zip_filename)
+            await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"**❌ Erro interno ao criar o ZIP:** {e}", color=0x335fff))
         except Exception:
-            pass
+            await interaction.channel.send(embed=discord.Embed(description=f"**❌ Erro interno ao criar o ZIP:** {e}", color=0x335fff))
+        for file in downloaded_files:
+            try:
+                if os.path.exists(file):
+                    os.remove(file)
+            except Exception:
+                pass
+        return
+
+    final_msg = f"**☑️ Lote concluido: {len(downloaded_files)} arquivos processados.**"
+    if failed_ids:
+        final_msg += f"\n**❌️ Falhas** ({len(failed_ids)}): "
+
+        if len(failed_ids) == 1:
+            final_msg += failed_ids[0]
+        else:
+            final_msg += ", ".join(f"`{i}`" for i in failed_ids)
+
+    try:
+        if os.path.exists(zip_filename):
+            if os.path.getsize(zip_filename) > 10 * 1024 * 1024:
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description="O arquivo ZIP final excede o limite de 10MB do Discord. Enviando para o Litterbox...", color=0x335fff))
+                litterbox_url = await upload_litterbox(zip_filename)
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"{final_msg}\n\nO arquivo ZIP excedeu o limite de 10MB do Discord. Link do Litterbox: {litterbox_url}", color=0x335fff))
+            else:
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description=final_msg, color=0x335fff), attachments=[discord.File(zip_filename)])
+        else:
+            await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"{final_msg}\n\n**❌ Erro:** O arquivo ZIP falhou ao ser salvo no disco.", color=0x335fff))
+    except discord.errors.HTTPException:
+        if os.path.exists(zip_filename):
+            if os.path.getsize(zip_filename) > 10 * 1024 * 1024:
+                litterbox_url = await upload_litterbox(zip_filename)
+                await interaction.channel.send(content=None, embed=discord.Embed(description=f"{final_msg}\n\nO arquivo ZIP excedeu o limite de 10MB do Discord. Link do Litterbox: {litterbox_url}", color=0x335fff))
+            else:
+                await interaction.channel.send(content=None, embed=discord.Embed(description=final_msg, color=0x335fff), file=discord.File(zip_filename))
+        else:
+            await interaction.channel.send(embed=discord.Embed(description=f"{final_msg}\n\n**❌ Erro:** O arquivo ZIP falhou ao ser salvo no disco.", color=0x335fff))
+
+    try:
+        if os.path.exists(zip_filename):
+            os.remove(zip_filename)
+    except Exception:
+        pass
 
     for file in downloaded_files:
         try:
