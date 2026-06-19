@@ -501,28 +501,27 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
         
         if asset_url:
             logger.info(f"Asset {asset_id} - URL publica obtida com sucesso!")
-
-    if not asset_url:
-        logger.info(f"Asset {asset_id} - Acesso publico negado. Tentando fallback com PlaceIds/UniverseIds e Cookie...")
-        
-        if creator_id:
-            games_info = await fetch_creator_games(session, creator_id, creator_type)
-            if games_info:
-                for g in games_info:
-                    if g.get("place_id"):
-                        asset_url = await fetch_asset_location(session, asset_id, g["place_id"], ROBLOX_COOKIE)
-                        if asset_url:
-                            logger.info(f"Asset {asset_id} - URL obtida via fallback (PlaceID: {g['place_id']}).")
-                            break
-                    if g.get("universe_id"):
-                        asset_url = await fetch_asset_location(session, asset_id, None, ROBLOX_COOKIE, g["universe_id"])
-                        if asset_url:
-                            logger.info(f"Asset {asset_id} - URL obtida via fallback (UniverseID: {g['universe_id']}).")
-                            break
-            else:
-                logger.warning(f"Asset {asset_id} - Nenhuma experiencia encontrada para o criador.")
         else:
-            logger.error(f"Asset {asset_id} - Nao foi possivel obter o criador do asset para o fallback.")
+            logger.info(f"Asset {asset_id} - Acesso publico negado. Tentando fallback com PlaceIds/UniverseIds e Cookie...")
+            
+            if creator_id:
+                games_info = await fetch_creator_games(session, creator_id, creator_type)
+                if games_info:
+                    for g in games_info:
+                        if g.get("place_id"):
+                            asset_url = await fetch_asset_location(session, asset_id, g["place_id"], ROBLOX_COOKIE)
+                            if asset_url:
+                                logger.info(f"Asset {asset_id} - URL obtida via fallback (PlaceID: {g['place_id']}).")
+                                break
+                        if g.get("universe_id"):
+                            asset_url = await fetch_asset_location(session, asset_id, None, ROBLOX_COOKIE, g["universe_id"])
+                            if asset_url:
+                                logger.info(f"Asset {asset_id} - URL obtida via fallback (UniverseID: {g['universe_id']}).")
+                                break
+                else:
+                    logger.warning(f"Asset {asset_id} - Nenhuma experiencia encontrada para o criador.")
+            else:
+                logger.error(f"Asset {asset_id} - Nao foi possivel obter o criador do asset para o fallback.")
 
     if not asset_url:
         logger.info(f"Asset {asset_id} - Tentando bypass de historico de versoes (forçado)...")
