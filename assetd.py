@@ -745,7 +745,7 @@ async def asset(interaction: discord.Interaction, asset_id: str):
         except Exception:
             pass
     else:
-        await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"❌️ Erro: {error}", color=0x335fff))
+        await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"**❌️ Erro:** {error}", color=0x335fff))
 
 @client.tree.command(name="assetbatch", description="Baixa multiplos assets e retorna um arquivo ZIP limpo")
 async def assetbatch(interaction: discord.Interaction, asset_ids: str):
