@@ -34,6 +34,7 @@ logger.addHandler(ch)
 
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 ROBLOX_COOKIE = os.getenv("ROBLOX_COOKIE")
+GOFILE_TOKEN = os.getenv("GOFILE_TOKEN")
 
 def load_fallback_games():
     place_ids = []
@@ -59,19 +60,33 @@ FALLBACK_GAMES = load_fallback_games()
 
 NO_BINARY_TYPES = [21, 34]
 
-async def upload_catbox(file_path: str, expire="72h"):
-    url = "https://catbox.moe/user/api.php"
+async def upload_gofile(file_path: str):
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=300)) as session:
+            async with session.get("https://api.gofile.io/servers") as resp:
+                if resp.status == 200:
+                    server_data = await resp.json()
+                    if server_data.get("status") == "ok":
+                        server = server_data["data"]["servers"][0]["name"]
+                    else:
+                        return "Erro: Falha ao obter servidor Gofile"
+                else:
+                    return f"Erro: HTTP {resp.status} (Gofile Servers)"
+
+            url = f"https://{server}.gofile.io/contents/uploadfile"
             with open(file_path, 'rb') as f:
                 data = aiohttp.FormData()
-                data.add_field('reqtype', 'fileupload')
-                data.add_field('time', expire)
-                data.add_field('fileToUpload', f, filename=os.path.basename(file_path))
+                data.add_field('file', f, filename=os.path.basename(file_path))
+                if GOFILE_TOKEN:
+                    data.add_field('token', GOFILE_TOKEN)
                 
                 async with session.post(url, data=data) as response:
                     if response.status == 200:
-                        return await response.text()
+                        result = await response.json()
+                        if result.get("status") == "ok":
+                            return result["data"]["downloadPage"]
+                        else:
+                            return f"Erro: {result.get('status')}"
                     else:
                         return f"Erro: HTTP {response.status}"
     except Exception as e:
@@ -754,16 +769,16 @@ async def asset(interaction: discord.Interaction, asset_id: str):
                 file_path = await convert_media(file_path, fmt, qual)
             
             if os.path.getsize(file_path) > 10 * 1024 * 1024:
-                await interaction.edit_original_response(content=None, embed=discord.Embed(description="O arquivo convertido excede o limite de 10MB do Discord. Enviando para o Catbox...", color=0x335fff), view=None)
-                catbox_url = await upload_catbox(file_path)
-                await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"O arquivo excedeu o limite de 10MB do Discord. Link do Catbox: {catbox_url}", color=0x335fff), view=None)
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description="O arquivo convertido excede o limite de 10MB do Discord. Enviando para o Gofile...", color=0x335fff), view=None)
+                gofile_url = await upload_gofile(file_path)
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"O arquivo excedeu o limite de 10MB do Discord. Link do Gofile: {gofile_url}", color=0x335fff), view=None)
             else:
                 await interaction.edit_original_response(content=None, embed=discord.Embed(description="**☑️ Concluído!**", color=0x335fff), attachments=[discord.File(file_path)], view=None)
         else:
             if os.path.getsize(file_path) > 10 * 1024 * 1024:
-                await interaction.edit_original_response(content=None, embed=discord.Embed(description="O arquivo excede o limite de 10MB do Discord. Enviando para o Catbox...", color=0x335fff))
-                catbox_url = await upload_catbox(file_path)
-                await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"O arquivo excedeu o limite de 10MB do Discord. Link do Catbox: {catbox_url}", color=0x335fff))
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description="O arquivo excede o limite de 10MB do Discord. Enviando para o Gofile...", color=0x335fff))
+                gofile_url = await upload_gofile(file_path)
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"O arquivo excedeu o limite de 10MB do Discord. Link do Gofile: {gofile_url}", color=0x335fff))
             else:
                 await interaction.edit_original_response(content=None, embed=discord.Embed(description="**☑️ Concluído!**", color=0x335fff), attachments=[discord.File(file_path)])
                 
@@ -917,9 +932,9 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
     try:
         if os.path.exists(zip_filename):
             if os.path.getsize(zip_filename) > 10 * 1024 * 1024:
-                await interaction.edit_original_response(content=None, embed=discord.Embed(description="O arquivo ZIP final excede o limite de 10MB do Discord. Enviando para o Catbox...", color=0x335fff))
-                catbox_url = await upload_catbox(zip_filename)
-                await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"{final_msg}\n\nO arquivo ZIP excedeu o limite de 10MB do Discord. Link do Catbox: {catbox_url}", color=0x335fff))
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description="O arquivo ZIP final excede o limite de 10MB do Discord. Enviando para o Gofile...", color=0x335fff))
+                gofile_url = await upload_gofile(zip_filename)
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"{final_msg}\n\nO arquivo ZIP excedeu o limite de 10MB do Discord. Link do Gofile: {gofile_url}", color=0x335fff))
             else:
                 await interaction.edit_original_response(content=None, embed=discord.Embed(description=final_msg, color=0x335fff), attachments=[discord.File(zip_filename)])
         else:
@@ -927,8 +942,8 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
     except discord.errors.HTTPException:
         if os.path.exists(zip_filename):
             if os.path.getsize(zip_filename) > 10 * 1024 * 1024:
-                catbox_url = await upload_catbox(zip_filename)
-                await interaction.channel.send(content=None, embed=discord.Embed(description=f"{final_msg}\n\nO arquivo ZIP excedeu o limite de 10MB do Discord. Link do Catbox: {catbox_url}", color=0x335fff))
+                gofile_url = await upload_gofile(zip_filename)
+                await interaction.channel.send(content=None, embed=discord.Embed(description=f"{final_msg}\n\nO arquivo ZIP excedeu o limite de 10MB do Discord. Link do Gofile: {gofile_url}", color=0x335fff))
             else:
                 await interaction.channel.send(content=None, embed=discord.Embed(description=final_msg, color=0x335fff), file=discord.File(zip_filename))
         else:
