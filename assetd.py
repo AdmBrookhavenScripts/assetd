@@ -686,7 +686,8 @@ client = RobloxAssetBot()
 
 @client.tree.command(name="asset", description="Baixa um unico asset do Roblox de forma segura")
 async def asset(interaction: discord.Interaction, asset_id: str):
-    await interaction.response.send_message(embed=discord.Embed(description="Processando...\n`🟩⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜`️", color=0x1446ff))
+    state = {"current": 0, "total": 1}
+    await interaction.response.send_message(embed=discord.Embed(description=f"Processando... {state['current']}/{state['total']} Assets\n`🟩⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️`\n\nTempo estimado: 9s", color=0x1446ff))
     
     async def progress_task():
         try:
@@ -694,7 +695,8 @@ async def asset(interaction: discord.Interaction, asset_id: str):
             while i < 10:
                 await asyncio.sleep(1)
                 i += 1
-                await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"Processando...\n{'`🟩`' * i}{'`⬜`️' * (10 - i)}", color=0x1446ff))
+                desc = f"Processando... {state['current']}/{state['total']} Assets\n`{'🟩' * i}{'⬜️' * (10 - i)}`\n\nTempo estimado: {10 - i}s"
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description=desc, color=0x1446ff))
         except asyncio.CancelledError:
             pass
 
@@ -704,9 +706,10 @@ async def asset(interaction: discord.Interaction, asset_id: str):
     
     async with aiohttp.ClientSession() as session:
         file_path, error = await download_core(session, clean_id)
+        state["current"] = 1
         
     ptask.cancel()
-    await interaction.edit_original_response(content=None, embed=discord.Embed(description="Processando...\n`🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩`", color=0x1446ff))
+    await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"Processando... {state['total']}/{state['total']} Assets\n`🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩`\n\nTempo estimado: 0s", color=0x1446ff))
         
     if file_path and os.path.exists(file_path):
         has_a = file_path.endswith('.ogg')
@@ -746,7 +749,18 @@ async def asset(interaction: discord.Interaction, asset_id: str):
 
 @client.tree.command(name="assetbatch", description="Baixa multiplos assets e retorna um arquivo ZIP limpo")
 async def assetbatch(interaction: discord.Interaction, asset_ids: str):
-    await interaction.response.send_message(embed=discord.Embed(description="Processando...\n`🟩⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️`", color=0x1446ff))
+    raw_ids = [x.strip() for x in asset_ids.split(',') if x.strip()]
+    ids_list = []
+    for x in raw_ids:
+        if x not in ids_list:
+            ids_list.append(x)
+            
+    if len(ids_list) > 20:
+        await interaction.response.send_message(embed=discord.Embed(description="Por favor, limite a 20 assets por lote para evitar sobrecarga.", color=0x1446ff))
+        return
+
+    state = {"current": 0, "total": len(ids_list)}
+    await interaction.response.send_message(embed=discord.Embed(description=f"Processando... 0/{state['total']} Assets\n`🟩⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️`\n\nTempo estimado: 13s", color=0x1446ff))
     
     async def progress_task():
         try:
@@ -754,22 +768,13 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
             while i < 10:
                 await asyncio.sleep(1.5)
                 i += 1
-                await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"Processando...\n{'`🟩`' * i}{'`⬜️`' * (10 - i)}", color=0x1446ff))
+                est = max(1, int((10 - i) * 1.5))
+                desc = f"Processando... {state['current']}/{state['total']} Assets\n`{'🟩' * i}{'⬜️' * (10 - i)}`\n\nTempo estimado: {est}s"
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description=desc, color=0x1446ff))
         except asyncio.CancelledError:
             pass
 
     ptask = asyncio.create_task(progress_task())
-    
-    raw_ids = [x.strip() for x in asset_ids.split(',') if x.strip()]
-    ids_list = []
-    for x in raw_ids:
-        if x not in ids_list:
-            ids_list.append(x)
-    
-    if len(ids_list) > 20:
-        ptask.cancel()
-        await interaction.edit_original_response(content=None, embed=discord.Embed(description="Por favor, limite a 20 assets por lote para evitar sobrecarga.", color=0x1446ff))
-        return
 
     downloaded_files = []
     errors = []
@@ -783,6 +788,7 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
                 results.append(res)
             except Exception as e:
                 results.append(e)
+            state["current"] += 1
 
     for aid, res in zip(ids_list, results):
         if isinstance(res, tuple):
@@ -798,7 +804,7 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
             errors.append(f"Exceção severa: {str(res)}")
 
     ptask.cancel()
-    await interaction.edit_original_response(content=None, embed=discord.Embed(description="Processando...\n`🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩`", color=0x1446ff))
+    await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"Processando... {state['total']}/{state['total']} Assets\n`🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩`\n\nTempo estimado: 0s", color=0x1446ff))
 
     if not downloaded_files:
         err_msg = "\n".join(errors)[:1800]
