@@ -399,28 +399,18 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
                 logger.info(f"Stream selecionado (Fallback): {best_stream[0]}")
 
         def get_url_with_auth(base_path, target_path, master_url):
-            from urllib.parse import parse_qs, urlencode
-            
             joined = urljoin(base_path, target_path)
             parsed_joined = urlparse(joined)
             parsed_master = urlparse(master_url)
             
             if not urlparse(target_path).query:
-                master_qs = parse_qs(parsed_master.query)
-                
-                if parsed_joined.netloc != parsed_master.netloc:
-                    filtered_qs = {k: v for k, v in master_qs.items() if k not in ['Signature', 'Expires', 'Policy', 'Key-Pair-Id']}
-                    joined = urlunparse(parsed_joined._replace(query=urlencode(filtered_qs, doseq=True)))
-                else:
+                if parsed_joined.netloc == parsed_master.netloc:
                     joined = urlunparse(parsed_joined._replace(query=parsed_master.query))
-                    
+                
             return joined
-            
+
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            "Cookie": f".ROBLOSECURITY={ROBLOX_COOKIE}" if ROBLOX_COOKIE else "",
-            "Origin": "https://www.roblox.com",
-            "Referer": "https://www.roblox.com/"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         }
 
         if not best_playlist_url:
@@ -432,7 +422,7 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
                     "{$RBX-BASE-URI}",
                     rbx_base_uri.rstrip("/")
                 )
-                
+            else:
                 best_playlist_url = get_url_with_auth(
                     base_url,
                     best_playlist_url,
@@ -591,7 +581,7 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
 
     if asset_type_id:
         logger.info(f"Asset {asset_id} - Tentando obter URL de forma publica...")
-        asset_url = await fetch_asset_location(session, asset_id, place_id=9391468976, cookie=ROBLOX_COOKIE) 
+        asset_url = await fetch_asset_location(session, asset_id)
         
         if asset_url:
             logger.info(f"Asset {asset_id} - URL publica obtida com sucesso!")
