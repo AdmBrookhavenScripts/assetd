@@ -581,7 +581,7 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
 
     if asset_type_id:
         logger.info(f"Asset {asset_id} - Tentando obter URL de forma publica...")
-        asset_url = await fetch_asset_location(session, asset_id)
+        asset_url = await fetch_asset_location(session, asset_id, place_id=9391468976, cookie=ROBLOX_COOKIE) 
         
         if asset_url:
             logger.info(f"Asset {asset_id} - URL publica obtida com sucesso!")
