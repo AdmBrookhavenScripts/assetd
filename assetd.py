@@ -638,7 +638,13 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
 
     try:
         logger.info(f"Asset URL: {asset_url}")
-        async with session.get(asset_url) as response:
+        
+        download_headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Accept": "*/*"
+        }
+        
+        async with session.get(asset_url, headers=download_headers) as response:
             if response.status != 200:
                 msg = f"Asset {asset_id} - Falha no download HTTP {response.status}."
                 logger.error(msg)
