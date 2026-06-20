@@ -399,16 +399,23 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
                 logger.info(f"Stream selecionado (Fallback): {best_stream[0]}")
 
         def get_url_with_auth(base_path, target_path, master_url):
+            from urllib.parse import parse_qs, urlencode
+            
             joined = urljoin(base_path, target_path)
             parsed_joined = urlparse(joined)
             parsed_master = urlparse(master_url)
             
-            if parsed_joined.netloc == parsed_master.netloc:
-               if not urlparse(target_path).query:
-                joined = urlunparse(parsed_joined._replace(query=parsed_master.query))
+            if not urlparse(target_path).query:
+                master_qs = parse_qs(parsed_master.query)
                 
+                if parsed_joined.netloc != parsed_master.netloc:
+                    filtered_qs = {k: v for k, v in master_qs.items() if k not in ['Signature', 'Expires', 'Policy', 'Key-Pair-Id']}
+                    joined = urlunparse(parsed_joined._replace(query=urlencode(filtered_qs, doseq=True)))
+                else:
+                    joined = urlunparse(parsed_joined._replace(query=parsed_master.query))
+                    
             return joined
-
+            
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
             "Cookie": f".ROBLOSECURITY={ROBLOX_COOKIE}" if ROBLOX_COOKIE else "",
