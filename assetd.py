@@ -64,51 +64,102 @@ NO_BINARY_TYPES = [21, 34]
 async def upload_gofile(file_path: str):
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=300)) as session:
-            async with session.get("https://api.gofile.io/servers") as resp:
-                if resp.status == 200:
-                    server_data = await resp.json()
-                    if server_data.get("status") == "ok":
-                        server = server_data["data"]["servers"][0]["name"]
-                    else:
-                        return "Erro: Falha ao obter servidor Gofile"
-                else:
-                    return f"Erro: HTTP {resp.status} (Gofile Servers)"
-
-            url = f"https://{server}.gofile.io/contents/uploadfile"
-            with open(file_path, 'rb') as f:
-                data = aiohttp.FormData()
-                data.add_field('file', f, filename=os.path.basename(file_path))
-                if GOFILE_TOKEN:
-                    data.add_field('token', GOFILE_TOKEN)
-                
-                async with session.post(url, data=data) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        if result.get("status") == "ok":
-                            download_page = result["data"]["downloadPage"]
-                            file_id = result["data"].get("fileId")
-                            token = GOFILE_TOKEN or result["data"].get("guestToken")
-                            
-                            if file_id and token:
-                                expiry_timestamp = int(time.time()) + 86400 
-                                update_url = f"https://api.gofile.io/contents/{file_id}/update"
-                                update_data = {
-                                    "token": token,
-                                    "attribute": "expiry",
-                                    "attributeValue": str(expiry_timestamp)
-                                }
-                                try:
-                                    await session.put(update_url, data=update_data)
-                                except Exception as e:
-                                    logger.warning(f"Aviso: Não foi possível definir a expiração de 24h: {e}")
-                                    
-                            return download_page
+            servers = []
+            try:
+                async with session.get("https://api.gofile.io/servers") as resp:
+                    if resp.status == 200:
+                        server_data = await resp.json()
+                        if server_data.get("status") == "ok":
+                            servers = [srv["name"] for srv in server_data["data"]["servers"]]
                         else:
-                            return f"Erro: {result.get('status')}"
+                            return f"Erro: Falha da API ao obter servidores Gofile (Status: {server_data.get('status')})"
                     else:
-                        return f"Erro: HTTP {response.status}"
+                        return f"Erro: HTTP {resp.status} na API de servidores Gofile"
+            except Exception as e:
+                logger.error(f"[Gofile] Erro ao buscar servidores: {e}")
+                return f"Erro de conexão ao buscar servidores Gofile: {str(e)}"
+
+            if not servers:
+                return "Erro: Nenhum servidor Gofile disponível retornado pela API."
+
+            max_attempts = len(servers)
+            backoff = 1
+            errors_log = []
+
+            for attempt, server in enumerate(servers, start=1):
+                url = f"https://{server}.gofile.io/contents/uploadfile"
+                logger.info(f"[Gofile] Tentativa {attempt}/{max_attempts} de upload. Servidor: {server}")
+
+                try:
+                    with open(file_path, 'rb') as f:
+                        data = aiohttp.FormData()
+                        data.add_field('file', f, filename=os.path.basename(file_path))
+                        if GOFILE_TOKEN:
+                            data.add_field('token', GOFILE_TOKEN)
+                        
+                        async with session.post(url, data=data) as response:
+                            if response.status == 200:
+                                result = await response.json()
+                                if result.get("status") == "ok":
+                                    logger.info(f"[Gofile] Sucesso no servidor {server}!")
+                                    download_page = result["data"]["downloadPage"]
+                                    file_id = result["data"].get("fileId")
+                                    token = GOFILE_TOKEN or result["data"].get("guestToken")
+                                    
+                                    if file_id and token:
+                                        expiry_timestamp = int(time.time()) + 86400 
+                                        update_url = f"https://api.gofile.io/contents/{file_id}/update"
+                                        update_data = {
+                                            "token": token,
+                                            "attribute": "expiry",
+                                            "attributeValue": str(expiry_timestamp)
+                                        }
+                                        try:
+                                            await session.put(update_url, data=update_data, timeout=aiohttp.ClientTimeout(total=15))
+                                        except Exception as e:
+                                            logger.warning(f"[Gofile] Aviso: Não foi possível definir a expiração de 24h: {e}")
+                                            
+                                    return download_page
+                                else:
+                                    msg = f"API Status: {result.get('status')}"
+                                    logger.warning(f"[Gofile] Falha na API no servidor {server}: {msg}")
+                                    errors_log.append(f"{server} ({msg})")
+                                    
+                            elif response.status in [500, 502, 503, 504]:
+                                msg = f"HTTP {response.status}"
+                                logger.warning(f"[Gofile] Instabilidade no servidor {server} ({msg}).")
+                                errors_log.append(f"{server} ({msg})")
+                            else:
+                                msg = f"Erro fatal HTTP {response.status}"
+                                logger.error(f"[Gofile] {msg} no servidor {server}. Cancelando envio.")
+                                return f"Erro: {msg} ao tentar fazer upload."
+
+                except asyncio.TimeoutError:
+                    msg = "Timeout da conexão"
+                    logger.warning(f"[Gofile] {msg} no servidor {server}.")
+                    errors_log.append(f"{server} ({msg})")
+                except aiohttp.ClientError as e:
+                    msg = f"Erro de Rede ({e.__class__.__name__})"
+                    logger.warning(f"[Gofile] {msg} no servidor {server}: {e}")
+                    errors_log.append(f"{server} ({msg})")
+                except Exception as e:
+                    msg = f"Exceção Inesperada ({e.__class__.__name__})"
+                    logger.error(f"[Gofile] {msg} no servidor {server}: {e}")
+                    errors_log.append(f"{server} ({msg})")
+
+                if attempt < max_attempts:
+                    logger.info(f"[Gofile] Aguardando {backoff}s antes de tentar o próximo servidor...")
+                    await asyncio.sleep(backoff)
+                    backoff *= 2
+
+            detalhes_falha = " | ".join(errors_log)
+            erro_final = f"Erro: Falha no upload após tentar {max_attempts} servidores.\nDetalhes: {detalhes_falha}"
+            logger.error(f"[Gofile] Falha definitiva: {erro_final}")
+            return erro_final
+
     except Exception as e:
-        return f"Erro: {str(e)}"
+        logger.critical(f"[Gofile] Erro crítico e irrecuperável: {str(e)}")
+        return f"Erro crítico na rotina de upload: {str(e)}"
 
 def detect_file_extension(content: bytes, content_type: str, fallback_ext: str) -> str:
     if content.startswith(b'#EXTM3U'):
