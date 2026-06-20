@@ -404,14 +404,14 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
             parsed_master = urlparse(master_url)
             
             if not urlparse(target_path).query:
-                if parsed_joined.netloc == parsed_master.netloc:
-                    joined = urlunparse(parsed_joined._replace(query=parsed_master.query))
+                joined = urlunparse(parsed_joined._replace(query=parsed_master.query))
                 
             return joined
 
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-        }
+            headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Cookie": f".ROBLOSECURITY={ROBLOX_COOKIE}" if ROBLOX_COOKIE else ""
+            }
 
         if not best_playlist_url:
             best_playlist_url = base_url
