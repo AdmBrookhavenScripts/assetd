@@ -422,7 +422,7 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
                     "{$RBX-BASE-URI}",
                     rbx_base_uri.rstrip("/")
                 )
-            else:
+                
                 best_playlist_url = get_url_with_auth(
                     base_url,
                     best_playlist_url,
