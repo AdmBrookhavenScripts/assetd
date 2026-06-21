@@ -346,20 +346,11 @@ async def convert_media(input_path: str, format: str, quality: str) -> str:
 async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, base_url: str) -> str:
     logger.info(f"Processando playlist HLS: {m3u8_path}")
     try:
-        from urllib.parse import urlparse, parse_qs, urljoin
+        from urllib.parse import urlparse, urljoin
         
-        # 1. Extrair os parâmetros de query da URL base pública
+        # 1. Extrair a query string original inteira (sem converter para cookies!)
         parsed_base = urlparse(base_url)
-        qs = parse_qs(parsed_base.query)
-        
-        # 2. Converter os parâmetros em CloudFront Signed Cookies
-        cf_cookies = {}
-        if 'Policy' in qs:
-            cf_cookies['CloudFront-Policy'] = qs['Policy'][0]
-        if 'Signature' in qs:
-            cf_cookies['CloudFront-Signature'] = qs['Signature'][0]
-        if 'Key-Pair-Id' in qs:
-            cf_cookies['CloudFront-Key-Pair-Id'] = qs['Key-Pair-Id'][0]
+        original_query = parsed_base.query
 
         with open(m3u8_path, 'r', encoding='utf-8') as f:
             m3u8_content = f.read()
@@ -404,14 +395,22 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
                         best_playlist_url = url
                         break
 
-        def resolve_hls_url(target_path, rbx_base_uri):
-            # Resolve the base URL path LIMPA (sem query strings)
+        # 2. Nova função de resolução que anexa as credenciais na URL
+        def resolve_hls_url(target_path, rbx_base_uri, query_string):
             if "{$RBX-BASE-URI}" in target_path:
                 resolved = target_path.replace("{$RBX-BASE-URI}", rbx_base_uri.rstrip('/'))
             elif not target_path.startswith('http'):
                 resolved = urljoin(rbx_base_uri, target_path)
             else:
                 resolved = target_path
+                
+            # Injeta a assinatura na URL final
+            if query_string:
+                if '?' in resolved:
+                    resolved += '&' + query_string
+                else:
+                    resolved += '?' + query_string
+                    
             return resolved
 
         cdn_headers = {
@@ -425,11 +424,11 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
             best_playlist_url = base_url
             internal_m3u8_content = m3u8_content
         else:
-            if rbx_base_uri:
-                best_playlist_url = resolve_hls_url(best_playlist_url, rbx_base_uri)
+            # Resolvemos a URL passando a query string original
+            best_playlist_url = resolve_hls_url(best_playlist_url, rbx_base_uri if rbx_base_uri else "", original_query)
 
-            # 3. Baixar a playlist interna enviando os cookies de autenticação
-            async with session.get(best_playlist_url, headers=cdn_headers, cookies=cf_cookies) as resp:
+            # 3. Baixar a playlist interna (sem enviar os cookies, pois está tudo na URL agora)
+            async with session.get(best_playlist_url, headers=cdn_headers) as resp:
                 if resp.status != 200:
                     text = await resp.text()
                     logger.error(f"Falha ao baixar playlist interna: {resp.status} | Resposta S3: {text[:250]}")
@@ -448,7 +447,8 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         segment_files = []
         
         for i, seg in enumerate(segments):
-            seg_url = resolve_hls_url(seg, rbx_base_uri if rbx_base_uri else "")
+            # Resolvemos a URL de cada "pedacinho" de vídeo passando a query string original
+            seg_url = resolve_hls_url(seg, rbx_base_uri if rbx_base_uri else "", original_query)
             
             clean_url = seg_url.split('?')[0]
             filename = clean_url.split('/')[-1]
@@ -456,8 +456,8 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
             
             seg_path = os.path.join(output_dir, f"{base_name}_seg_{i:04d}{ext}")
             
-            # 4. Baixar os segmentos enviando os cookies de autenticação
-            async with session.get(seg_url, headers=cdn_headers, cookies=cf_cookies) as resp:
+            # 4. Baixar os segmentos (também sem usar o parâmetro cookies=...)
+            async with session.get(seg_url, headers=cdn_headers) as resp:
                 if resp.status == 200:
                     content = await resp.read()
                     with open(seg_path, 'wb') as f:
