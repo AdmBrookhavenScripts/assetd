@@ -358,6 +358,13 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         if 'Signature' in qs: cf_cookies['CloudFront-Signature'] = qs['Signature'][0]
         if 'Key-Pair-Id' in qs: cf_cookies['CloudFront-Key-Pair-Id'] = qs['Key-Pair-Id'][0]
 
+        # CORREÇÃO: Definindo os headers do CDN para evitar o Erro 403 e o NameError
+        cdn_headers = {
+            "User-Agent": "Roblox/WinInet",
+            "Accept": "*/*",
+            "Roblox-Browser-Asset-Request": "false"
+        }
+
         with open(m3u8_path, 'r', encoding='utf-8') as f:
             m3u8_content = f.read()
 
@@ -399,8 +406,7 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
                 force_base_url = base_url_no_query if base_url_no_query.endswith('/') else base_url_no_query + '/'
                 resolved = urljoin(force_base_url, resolved.lstrip('/'))
             
-            # CORREÇÃO: Repassa a string de consulta original INTACTA para os segmentos.
-            # O CloudFront exige as credenciais (Policy/Signature) mesmo em domínios externos.
+            # Repassa a string de consulta original INTACTA para os segmentos.
             if raw_query and 'Signature=' not in resolved:
                 resolved += ('&' if '?' in resolved else '?') + raw_query
                     
@@ -411,7 +417,7 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
             import yarl
             req_parsed = urlparse(url)
             
-            # CORREÇÃO: Permite o envio dos cookies para QUALQUER subdomínio da rede rbxcdn
+            # Permite o envio dos cookies para QUALQUER subdomínio da rede rbxcdn
             is_rbxcdn = req_parsed.netloc.endswith('.rbxcdn.com')
             use_cookies = cf_cookies if is_rbxcdn else {}
             
