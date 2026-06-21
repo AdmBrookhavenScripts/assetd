@@ -798,7 +798,7 @@ async def asset(interaction: discord.Interaction, asset_id: str):
                 if not state["running"]:
                     break
                 i += 1
-                desc = f"**🕣 Processando... {state['current']}/{state['total']} Assets\n{'`🟩`' * i}{'`⬜`️' * (10 - i)}\n\nTempo estimado: {10 - i}s**"
+                desc = f"**🕣 Processando... {state['current']}/{state['total']} Assets\n{'`🟩`' * i}{'⬜' * (10 - i)}\n\nTempo estimado: {10 - i}s**"
                 try:
                     await interaction.edit_original_response(content=None, embed=discord.Embed(description=desc, color=0x335fff))
                 except Exception:
@@ -883,7 +883,7 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
                     break
                 i += 1
                 est = max(1, int((10 - i) * 1.5))
-                desc = f"**🕣 Processando... {state['current']}/{state['total']} Assets\n{'`🟩`' * i}{'`⬜️`' * (10 - i)}\n\nTempo estimado: {est}s**"
+                desc = f"**🕣 Processando... {state['current']}/{state['total']} Assets\n{'`🟩`' * i}{'⬜️' * (10 - i)}\n\nTempo estimado: {est}s**"
                 try:
                     await interaction.edit_original_response(content=None, embed=discord.Embed(description=desc, color=0x335fff))
                 except Exception:
