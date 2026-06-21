@@ -399,12 +399,22 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
                 force_base_url = base_url_no_query if base_url_no_query.endswith('/') else base_url_no_query + '/'
                 resolved = urljoin(force_base_url, resolved.lstrip('/'))
             
-            # CORREÇÃO: Apenas injeta a query string original (Policy, Signature) 
-            # se estivermos operando no mesmo domínio da URL mestre.
             req_parsed = urlparse(resolved)
-            if raw_query and 'Signature=' not in resolved and req_parsed.netloc == parsed_base.netloc:
-                resolved += ('&' if '?' in resolved else '?') + raw_query
+            
+            # CORREÇÃO: Passa os tokens da Akamai para domínios externos (hls-segments), 
+            # mas retém as assinaturas restritas do CloudFront apenas para o domínio mestre.
+            if raw_query and 'Signature=' not in resolved:
+                qs_dict = parse_qs(raw_query)
+                if req_parsed.netloc == parsed_base.netloc:
+                    filtered_qs = raw_query
+                else:
+                    allowed_keys = ['__token__', 'hdnts']
+                    filtered_dict = {k: v for k, v in qs_dict.items() if k in allowed_keys}
+                    filtered_qs = urlencode(filtered_dict, doseq=True)
                 
+                if filtered_qs:
+                    resolved += ('&' if '?' in resolved else '?') + filtered_qs
+                    
             return resolved
 
         cdn_headers = {
@@ -418,8 +428,9 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         async def fetch_hls_data(url):
             req_parsed = urlparse(url)
             
-            is_roblox_domain = req_parsed.netloc.endswith('.rbxcdn.com') or req_parsed.netloc.endswith('.roblox.com')
-            use_cookies = cf_cookies if is_roblox_domain else {}
+            # CORREÇÃO: Só aplica os cookies gerados pelo CloudFront se o domínio for EXATAMENTE o mesmo da mestre
+            is_exact_domain = req_parsed.netloc == parsed_base.netloc
+            use_cookies = cf_cookies if is_exact_domain else {}
             
             async with session.get(url, headers=cdn_headers, cookies=use_cookies) as resp:
                 if resp.status == 200:
