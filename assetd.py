@@ -385,7 +385,7 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
                         if i + 1 < len(lines) and not lines[i+1].startswith('#'):
                             best_playlist_url = lines[i+1].strip()
 
-        # 4. Função de resolução inteligente corrigida (Preservando formatação exata)
+        # 4. Função de resolução inteligente corrigida
         def resolve_hls_url(target_path):
             resolved = target_path
             
@@ -399,40 +399,26 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
                 force_base_url = base_url_no_query if base_url_no_query.endswith('/') else base_url_no_query + '/'
                 resolved = urljoin(force_base_url, resolved.lstrip('/'))
             
-            req_parsed = urlparse(resolved)
-            
-            # CORREÇÃO: Passa os tokens da Akamai para domínios externos (hls-segments), 
-            # mantendo os caracteres LITERAIS (=, /, ~) para evitar rejeição da CDN.
+            # CORREÇÃO: Repassa a string de consulta original INTACTA para os segmentos.
+            # O CloudFront exige as credenciais (Policy/Signature) mesmo em domínios externos.
             if raw_query and 'Signature=' not in resolved:
-                if req_parsed.netloc == parsed_base.netloc:
-                    filtered_qs = raw_query
-                else:
-                    # Filtra os parâmetros cortando a string, sem usar urlencode
-                    allowed_prefixes = ('__token__=', 'hdnts=')
-                    filtered_params = [p for p in raw_query.split('&') if p.startswith(allowed_prefixes)]
-                    filtered_qs = '&'.join(filtered_params)
-                
-                if filtered_qs:
-                    resolved += ('&' if '?' in resolved else '?') + filtered_qs
+                resolved += ('&' if '?' in resolved else '?') + raw_query
                     
             return resolved
 
-        cdn_headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            "Referer": "https://www.roblox.com/",
-            "Origin": "https://www.roblox.com",
-            "Accept": "*/*"
-        }
-
         # 5. Baixador inteligente: Evita erro 403 validando o escopo dos cookies
         async def fetch_hls_data(url):
+            import yarl
             req_parsed = urlparse(url)
             
-            # CORREÇÃO: Só aplica os cookies gerados pelo CloudFront se o domínio for EXATAMENTE o mesmo da mestre
-            is_exact_domain = req_parsed.netloc == parsed_base.netloc
-            use_cookies = cf_cookies if is_exact_domain else {}
+            # CORREÇÃO: Permite o envio dos cookies para QUALQUER subdomínio da rede rbxcdn
+            is_rbxcdn = req_parsed.netloc.endswith('.rbxcdn.com')
+            use_cookies = cf_cookies if is_rbxcdn else {}
             
-            async with session.get(url, headers=cdn_headers, cookies=use_cookies) as resp:
+            # O Yarl impede que o aiohttp faça o URL encode automático de caracteres como = e ~
+            safe_url = yarl.URL(url, encoded=True)
+            
+            async with session.get(safe_url, headers=cdn_headers, cookies=use_cookies) as resp:
                 if resp.status == 200:
                     return await resp.read()
                 else:
