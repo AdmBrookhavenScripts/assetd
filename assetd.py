@@ -346,7 +346,7 @@ async def convert_media(input_path: str, format: str, quality: str) -> str:
 async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, base_url: str) -> str:
     logger.info(f"Processando playlist HLS: {m3u8_path}")
     try:
-        from urllib.parse import urlparse, urljoin, parse_qs, urlunparse
+        from urllib.parse import urlparse, urljoin, parse_qs, urlunparse, urlencode                
         
         parsed_base = urlparse(base_url)
         raw_query = parsed_base.query
