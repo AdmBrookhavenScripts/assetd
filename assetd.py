@@ -403,13 +403,17 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
             parsed_joined = urlparse(joined)
             parsed_master = urlparse(master_url)
             
-            if not urlparse(target_path).query and parsed_master.query:
-                joined = urlunparse(parsed_joined._replace(query=parsed_master.query))
-                
+            if parsed_joined.netloc == parsed_master.netloc:
+                if not urlparse(target_path).query and parsed_master.query:
+                    joined = urlunparse(parsed_joined._replace(query=parsed_master.query))
+                    
             return joined            
 
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Referer": "https://www.roblox.com/",
+            "Origin": "https://www.roblox.com",
+            "Accept": "*/*"
         }
 
         if not best_playlist_url:
@@ -417,13 +421,10 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
             internal_m3u8_content = m3u8_content
         else:
             if "{$RBX-BASE-URI}" in best_playlist_url and rbx_base_uri:
-            
-                raw_url = best_playlist_url.replace(
+                best_playlist_url = best_playlist_url.replace(
                     "{$RBX-BASE-URI}",
                     rbx_base_uri.rstrip("/")
                 )
-
-                best_playlist_url = get_url_with_auth(base_url, raw_url, base_url)
             else:
                 best_playlist_url = get_url_with_auth(
                     base_url,
@@ -839,6 +840,10 @@ async def asset(interaction: discord.Interaction, asset_id: str):
                 qual = view.audio_quality if has_a else view.video_quality
                 file_path = await convert_media(file_path, fmt, qual)
             
+            if not os.path.exists(file_path):
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description="**❌ Erro:** Falha na conversão da mídia (O servidor pode ter ficado sem memória).", color=0x335fff), view=None)
+                return
+
             if os.path.getsize(file_path) > 10 * 1024 * 1024:
                 await interaction.edit_original_response(content=None, embed=discord.Embed(description="O arquivo convertido excede o limite de 10MB do Discord. Enviando para o Gofile...", color=0x335fff), view=None)
                 gofile_url = await upload_gofile(file_path)
