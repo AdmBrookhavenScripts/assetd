@@ -346,17 +346,13 @@ async def convert_media(input_path: str, format: str, quality: str) -> str:
 async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, base_url: str) -> str:
     logger.info(f"Processando playlist HLS: {m3u8_path}")
     try:
-        from urllib.parse import urlparse, urljoin, parse_qs, urlencode, urlunparse
+        from urllib.parse import urlparse, urljoin, parse_qs, urlunparse
         
         parsed_base = urlparse(base_url)
-        qs = parse_qs(parsed_base.query)
-
-        # 1. Separar os tokens do CloudFront para enviar como Cookie (evita erro no S3)
-        # 1. Obter os cookies (opcional, mas não faz mal manter para o CloudFront)
-        # 1. Pegar a Query String bruta (NÃO use urlencode, pois ele destrói os '~' do Roblox)
         raw_query = parsed_base.query
         qs = parse_qs(raw_query)
 
+        # 1. Separar os tokens do CloudFront para enviar como Cookie
         cf_cookies = {}
         if 'Policy' in qs: cf_cookies['CloudFront-Policy'] = qs['Policy'][0]
         if 'Signature' in qs: cf_cookies['CloudFront-Signature'] = qs['Signature'][0]
@@ -365,7 +361,7 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         with open(m3u8_path, 'r', encoding='utf-8') as f:
             m3u8_content = f.read()
 
-        # 2. Restaurar o RBX-BASE-URI! Ele não é inútil, os vídeos reais estão lá.
+        # 2. Restaurar o RBX-BASE-URI
         rbx_base_uri = None
         for line in m3u8_content.splitlines():
             if line.startswith('#EXT-X-DEFINE:NAME="RBX-BASE-URI"'):
@@ -378,27 +374,31 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
 
         lines = m3u8_content.splitlines()
 
-        # ... (seu código de verificação "best_playlist_url" fica intacto aqui no meio) ...
+        # 3. Lógica restaurada para encontrar a melhor qualidade (Evita o UnboundLocalError)
+        best_playlist_url = None
+        max_bandwidth = 0
+        for i, line in enumerate(lines):
+            if line.startswith('#EXT-X-STREAM-INF:'):
+                bw_match = re.search(r'BANDWIDTH=(\d+)', line)
+                if bw_match:
+                    bandwidth = int(bw_match.group(1))
+                    if bandwidth > max_bandwidth:
+                        max_bandwidth = bandwidth
+                        if i + 1 < len(lines) and not lines[i+1].startswith('#'):
+                            best_playlist_url = lines[i+1].strip()
 
         # 4. Função de resolução inteligente
         def resolve_hls_url(target_path):
-            # Se o Roblox usar a variável {$RBX-BASE-URI} no arquivo
             if "{$RBX-BASE-URI}" in target_path and rbx_base_uri:
-                resolved = target_path.replace("{$RBX-BASE-URI}", rbx_base_uri)
-                # IMPORTANTE: NÃO anexamos a raw_query aqui. 
-                # O hls-segments usa segurança por Hash na URL e vai dar erro 403 
-                # se receber o token feito especificamente para o fts.rbxcdn.com.
-                return resolved
+                return target_path.replace("{$RBX-BASE-URI}", rbx_base_uri)
                 
             if target_path.startswith('http'):
                 return target_path
 
-            # Fallback padrão caso a M3U8 não use a base externa
             base_url_no_query = urlunparse((parsed_base.scheme, parsed_base.netloc, parsed_base.path, '', '', ''))
             force_base_url = base_url_no_query if base_url_no_query.endswith('/') else base_url_no_query + '/'
             resolved = urljoin(force_base_url, target_path.lstrip('/'))
             
-            # Só anexamos a query original se o arquivo estiver no mesmo servidor base
             if raw_query:
                 resolved += ('&' if '?' in resolved else '?') + raw_query
                 
@@ -411,19 +411,30 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
             "Accept": "*/*"
         }
 
+        # 5. Baixador inteligente: Evita erro 403 validando o escopo dos cookies
+        async def fetch_hls_data(url):
+            req_parsed = urlparse(url)
+            # Só envia os cookies se o domínio destino for IDÊNTICO ao base_url original
+            use_cookies = cf_cookies if req_parsed.netloc == parsed_base.netloc else {}
+            
+            async with session.get(url, headers=cdn_headers, cookies=use_cookies) as resp:
+                if resp.status == 200:
+                    return await resp.read()
+                else:
+                    text = await resp.text()
+                    logger.error(f"Falha HTTP {resp.status} em {url} | Resposta: {text[:250]}")
+                    return None
+
+        # 6. Fazendo download das playlists e segmentos usando a nova função
         if not best_playlist_url:
             best_playlist_url = base_url
             internal_m3u8_content = m3u8_content
         else:
             best_playlist_url = resolve_hls_url(best_playlist_url)
-
-            # Baixando playlist interna forçando Cookies + Query String limpa
-            async with session.get(best_playlist_url, headers=cdn_headers, cookies=cf_cookies) as resp:
-                if resp.status != 200:
-                    text = await resp.text()
-                    logger.error(f"Falha ao baixar playlist interna: {resp.status} | Resposta S3: {text[:250]}")
-                    return None
-                internal_m3u8_content = await resp.text()
+            internal_data = await fetch_hls_data(best_playlist_url)
+            if not internal_data:
+                return None
+            internal_m3u8_content = internal_data.decode('utf-8', errors='ignore')
 
         segments = [line for line in internal_m3u8_content.splitlines() if line and not line.startswith('#')]
         
@@ -445,20 +456,18 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
             
             seg_path = os.path.join(output_dir, f"{base_name}_seg_{i:04d}{ext}")
             
-            # Baixando os pedaços de vídeo
-            async with session.get(seg_url, headers=cdn_headers, cookies=cf_cookies) as resp:
-                if resp.status == 200:
-                    content = await resp.read()
-                    with open(seg_path, 'wb') as f:
-                        f.write(content)
-                    segment_files.append(seg_path)
-                else:
-                    text = await resp.text()
-                    logger.error(f"Falha ao baixar segmento HLS {clean_url} (HTTP {resp.status}): {text[:100]}")
+            seg_data = await fetch_hls_data(seg_url)
+            if seg_data:
+                with open(seg_path, 'wb') as f:
+                    f.write(seg_data)
+                segment_files.append(seg_path)
+            else:
+                logger.error(f"Falha ao baixar segmento HLS {clean_url}")
 
         if not segment_files:
             return None
 
+        # 7. Unindo os pedaços
         list_name = f"{base_name}_list.txt"
         list_path = os.path.join(output_dir, list_name)
         with open(list_path, 'w', encoding='utf-8') as f:
