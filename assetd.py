@@ -407,8 +407,16 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
                 resolved = urljoin(force_base_url, resolved.lstrip('/'))
             
             # Repassa a string de consulta original INTACTA para os segmentos.
+            # Repassa a string de consulta original filtrando e removendo os parâmetros do CloudFront
             if raw_query and 'Signature=' not in resolved:
-                resolved += ('&' if '?' in resolved else '?') + raw_query
+                from urllib.parse import parse_qsl, urlencode
+                # Remove parâmetros que ativam a autenticação de URL do S3/CloudFront indesejada
+                filtered_params = [
+                    (k, v) for k, v in parse_qsl(raw_query) 
+                    if k not in ['Signature', 'Expires', 'Policy', 'Key-Pair-Id']
+                ]
+                if filtered_params:
+                    resolved += ('&' if '?' in resolved else '?') + urlencode(filtered_params)
                     
             return resolved
 
