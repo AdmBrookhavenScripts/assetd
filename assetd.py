@@ -385,7 +385,7 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
                         if i + 1 < len(lines) and not lines[i+1].startswith('#'):
                             best_playlist_url = lines[i+1].strip()
 
-        # 4. Função de resolução inteligente corrigida
+        # 4. Função de resolução inteligente corrigida (Preservando formatação exata)
         def resolve_hls_url(target_path):
             resolved = target_path
             
@@ -402,15 +402,15 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
             req_parsed = urlparse(resolved)
             
             # CORREÇÃO: Passa os tokens da Akamai para domínios externos (hls-segments), 
-            # mas retém as assinaturas restritas do CloudFront apenas para o domínio mestre.
+            # mantendo os caracteres LITERAIS (=, /, ~) para evitar rejeição da CDN.
             if raw_query and 'Signature=' not in resolved:
-                qs_dict = parse_qs(raw_query)
                 if req_parsed.netloc == parsed_base.netloc:
                     filtered_qs = raw_query
                 else:
-                    allowed_keys = ['__token__', 'hdnts']
-                    filtered_dict = {k: v for k, v in qs_dict.items() if k in allowed_keys}
-                    filtered_qs = urlencode(filtered_dict, doseq=True)
+                    # Filtra os parâmetros cortando a string, sem usar urlencode
+                    allowed_prefixes = ('__token__=', 'hdnts=')
+                    filtered_params = [p for p in raw_query.split('&') if p.startswith(allowed_prefixes)]
+                    filtered_qs = '&'.join(filtered_params)
                 
                 if filtered_qs:
                     resolved += ('&' if '?' in resolved else '?') + filtered_qs
