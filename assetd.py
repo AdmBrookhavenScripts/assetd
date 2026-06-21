@@ -580,18 +580,14 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
     asset_url = None
 
     if asset_type_id:
-        if asset_type_id == 62:
-            logger.info(f"Asset {asset_id} - Video detectado. Forcando Cookie e PlaceIds/UniverseIds do criador...")
-        else:
-            logger.info(f"Asset {asset_id} - Tentando obter URL de forma publica...")
-            asset_url = await fetch_asset_location(session, asset_id)
-            
+        logger.info(f"Asset {asset_id} - Tentando obter URL de forma publica...")
+        asset_url = await fetch_asset_location(session, asset_id)
+        
         if asset_url:
             logger.info(f"Asset {asset_id} - URL publica obtida com sucesso!")
         else:
-            if asset_type_id != 62:
-                logger.info(f"Asset {asset_id} - Acesso publico negado. Tentando fallback com PlaceIds/UniverseIds e Cookie...")
-                
+            logger.info(f"Asset {asset_id} - Acesso publico negado. Tentando fallback com PlaceIds/UniverseIds e Cookie...")
+            
             if creator_id:
                 games_info = await fetch_creator_games(session, creator_id, creator_type)
                 if games_info:
