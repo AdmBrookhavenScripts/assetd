@@ -399,6 +399,8 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
                 logger.info(f"Stream selecionado (Fallback): {best_stream[0]}")
 
         def get_url_with_auth(base_path, target_path, master_url):
+            from urllib.parse import urljoin, urlparse, urlunparse, parse_qsl, urlencode
+            
             joined = urljoin(base_path, target_path)
             parsed_joined = urlparse(joined)
             parsed_master = urlparse(master_url)
@@ -406,6 +408,16 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
             if not urlparse(target_path).query and parsed_master.query:
                 if parsed_joined.netloc == parsed_master.netloc:
                     joined = urlunparse(parsed_joined._replace(query=parsed_master.query))
+                else:
+                    params = parse_qsl(parsed_master.query)
+                    
+                    aws_blocks = {'Signature', 'Policy', 'Key-Pair-Id', 'Expires', 'AWSAccessKeyId'}
+                    
+                    allowed = [(k, v) for k, v in params if k not in aws_blocks]
+                    
+                    if allowed:
+                        new_query = urlencode(allowed)
+                        joined = urlunparse(parsed_joined._replace(query=new_query))
                     
             return joined
 
