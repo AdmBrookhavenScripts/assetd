@@ -346,143 +346,137 @@ async def convert_media(input_path: str, format: str, quality: str) -> str:
 async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, base_url: str) -> str:
     logger.info(f"Processando playlist HLS: {m3u8_path}")
     try:
-        from urllib.parse import urlparse, urljoin, parse_qs, urlunparse, urlencode                
-        
-        parsed_base = urlparse(base_url)
-        raw_query = parsed_base.query
-        qs = parse_qs(raw_query)
-
-        # 1. Separar os tokens do CloudFront para enviar como Cookie
-        cf_cookies = {}
-        if 'Policy' in qs: cf_cookies['CloudFront-Policy'] = qs['Policy'][0]
-        if 'Signature' in qs: cf_cookies['CloudFront-Signature'] = qs['Signature'][0]
-        if 'Key-Pair-Id' in qs: cf_cookies['CloudFront-Key-Pair-Id'] = qs['Key-Pair-Id'][0]
-
-        # CORREÇÃO: Definindo os headers do CDN para evitar o Erro 403 e o NameError
-        cdn_headers = {
-            "User-Agent": "Roblox/WinInet",
-            "Accept": "*/*",
-            "Roblox-Browser-Asset-Request": "false"
-        }
-
         with open(m3u8_path, 'r', encoding='utf-8') as f:
             m3u8_content = f.read()
 
-        # 2. Restaurar o RBX-BASE-URI (Sem forçar a barra no final)
-        rbx_base_uri = None
-        for line in m3u8_content.splitlines():
-            if line.startswith('#EXT-X-DEFINE:NAME="RBX-BASE-URI"'):
-                match = re.search(r'VALUE="([^"]+)"', line)
-                if match:
-                    rbx_base_uri = match.group(1)
-                    break
-
         lines = m3u8_content.splitlines()
+        logger.info(f"Tipo de playlist detectada. Primeiras linhas: {lines[:5]}")
 
-        # 3. Lógica restaurada para encontrar a melhor qualidade
+        rbx_base_uri = None
+        for line in lines:
+            match = re.search(r'#EXT-X-DEFINE:NAME="RBX-BASE-URI",VALUE="([^"]+)"', line)
+            if match:
+                rbx_base_uri = match.group(1)
+                if not rbx_base_uri.endswith('/'):
+                    rbx_base_uri += '/'
+                logger.info(f"RBX-BASE-URI detectado: {rbx_base_uri}")
+                break
+
         best_playlist_url = None
-        max_bandwidth = 0
+        streams = []
+        
         for i, line in enumerate(lines):
-            if line.startswith('#EXT-X-STREAM-INF:'):
-                bw_match = re.search(r'BANDWIDTH=(\d+)', line)
-                if bw_match:
-                    bandwidth = int(bw_match.group(1))
-                    if bandwidth > max_bandwidth:
-                        max_bandwidth = bandwidth
-                        if i + 1 < len(lines) and not lines[i+1].startswith('#'):
-                            best_playlist_url = lines[i+1].strip()
+            if line.startswith('#EXT-X-STREAM-INF'):
+                if i + 1 < len(lines):
+                    streams.append((line, lines[i+1]))
+        
+        logger.info(f"Quantidade de streams encontrados: {len(streams)}")
+        
+        if streams:
+            best_stream = None
+            max_height = -1
 
-        # 4. Função de resolução inteligente corrigida
-        def resolve_hls_url(target_path):
-            resolved = target_path
+            for info, url in streams:
+                res_match = re.search(r'RESOLUTION=\d+x(\d+)', info)
+                if res_match:
+                    height = int(res_match.group(1))
+                    if height > max_height:
+                        max_height = height
+                        best_stream = (info, url)
+
+            if best_stream:
+                best_playlist_url = best_stream[1]
+                logger.info(f"Stream selecionado (Maior Resolução): {best_stream[0]}")
+            else:
+                best_playlist_url = streams[0][1]
+                for info, url in streams:
+                    if '720' in info or '720' in url:
+                        best_playlist_url = url
+                        best_stream = (info, url)
+                        break
+                if not best_stream:
+                    best_stream = streams[0]
+                logger.info(f"Stream selecionado (Fallback): {best_stream[0]}")
+
+        def get_url_with_auth(base_path, target_path, master_url):
+            joined = urljoin(base_path, target_path)
+            parsed_joined = urlparse(joined)
+            parsed_master = urlparse(master_url)
             
-            # Restaura a URI base com segurança, cortando barras sobressalentes
-            if "{$RBX-BASE-URI}" in target_path and rbx_base_uri:
-                resolved = target_path.replace("{$RBX-BASE-URI}", rbx_base_uri.rstrip('/'))
+            if not urlparse(target_path).query:
+                if parsed_joined.netloc == parsed_master.netloc:
+                    joined = urlunparse(parsed_joined._replace(query=parsed_master.query))
                 
-            # Se a URL não for absoluta, junta com a base
-            if not resolved.startswith('http'):
-                base_url_no_query = urlunparse((parsed_base.scheme, parsed_base.netloc, parsed_base.path, '', '', ''))
-                force_base_url = base_url_no_query if base_url_no_query.endswith('/') else base_url_no_query + '/'
-                resolved = urljoin(force_base_url, resolved.lstrip('/'))
-            
-            # Repassa a string de consulta original INTACTA para os segmentos.
-            # Repassa a string de consulta original filtrando e removendo os parâmetros do CloudFront
-            if raw_query and 'Signature=' not in resolved:
-                from urllib.parse import parse_qsl, urlencode
-                # Remove parâmetros que ativam a autenticação de URL do S3/CloudFront indesejada
-                filtered_params = [
-                    (k, v) for k, v in parse_qsl(raw_query) 
-                    if k not in ['Signature', 'Expires', 'Policy', 'Key-Pair-Id']
-                ]
-                if filtered_params:
-                    resolved += ('&' if '?' in resolved else '?') + urlencode(filtered_params)
-                    
-            return resolved
+            return joined
 
-        # 5. Baixador inteligente: Evita erro 403 validando o escopo dos cookies
-        async def fetch_hls_data(url):
-            import yarl
-            req_parsed = urlparse(url)
-            
-            # Permite o envio dos cookies para QUALQUER subdomínio da rede rbxcdn
-            is_rbxcdn = req_parsed.netloc.endswith('.rbxcdn.com')
-            use_cookies = cf_cookies if is_rbxcdn else {}
-            
-            # O Yarl impede que o aiohttp faça o URL encode automático de caracteres como = e ~
-            safe_url = yarl.URL(url, encoded=True)
-            
-            async with session.get(safe_url, headers=cdn_headers, cookies=use_cookies) as resp:
-                if resp.status == 200:
-                    return await resp.read()
-                else:
-                    text = await resp.text()
-                    logger.error(f"Falha HTTP {resp.status} em {url} | Resposta: {text[:250]}")
-                    return None
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        }
 
-        # 6. Fazendo download das playlists e segmentos
         if not best_playlist_url:
             best_playlist_url = base_url
             internal_m3u8_content = m3u8_content
         else:
-            best_playlist_url = resolve_hls_url(best_playlist_url)
-            internal_data = await fetch_hls_data(best_playlist_url)
-            if not internal_data:
-                return None
-            internal_m3u8_content = internal_data.decode('utf-8', errors='ignore')
+            if "{$RBX-BASE-URI}" in best_playlist_url and rbx_base_uri:
+                best_playlist_url = best_playlist_url.replace(
+                    "{$RBX-BASE-URI}",
+                    rbx_base_uri.rstrip("/")
+                )
+            else:
+                best_playlist_url = get_url_with_auth(
+                    base_url,
+                    best_playlist_url,
+                    base_url
+                )
+
+            logger.info(f"URL INTERNA = {best_playlist_url}")
+
+            async with session.get(best_playlist_url, headers=headers) as resp:
+                if resp.status != 200:
+                    logger.error(f"Falha ao baixar playlist interna: {resp.status}")
+                    return None
+                internal_m3u8_content = await resp.text()
 
         segments = [line for line in internal_m3u8_content.splitlines() if line and not line.startswith('#')]
         
         if not segments:
-            logger.error("Nenhum segmento encontrado.")
+            logger.error("Nenhum segmento encontrado na playlist HLS.")
             return None
 
         output_dir = os.path.dirname(m3u8_path) or '.'
         base_name = os.path.basename(m3u8_path).rsplit('.', 1)[0]
         
         segment_files = []
+        logger.info(f"Quantidade de segmentos encontrados: {len(segments)}")
+        logger.info(f"Baixando {len(segments)} segmentos HLS para {base_name}...")
         
+        segments_base_path = best_playlist_url
+
         for i, seg in enumerate(segments):
-            seg_url = resolve_hls_url(seg)
+            seg_url = get_url_with_auth(segments_base_path, seg, base_url)
             
             clean_url = seg_url.split('?')[0]
             filename = clean_url.split('/')[-1]
-            ext = '.' + filename.split('.')[-1] if '.' in filename else '.webm'
+            if '.' in filename:
+                ext = '.' + filename.split('.')[-1]
+            else:
+                ext = '.webm'
             
             seg_path = os.path.join(output_dir, f"{base_name}_seg_{i:04d}{ext}")
             
-            seg_data = await fetch_hls_data(seg_url)
-            if seg_data:
-                with open(seg_path, 'wb') as f:
-                    f.write(seg_data)
-                segment_files.append(seg_path)
-            else:
-                logger.error(f"Falha ao baixar segmento HLS {clean_url}")
+            async with session.get(seg_url, headers=headers) as resp:
+                if resp.status == 200:
+                    content = await resp.read()
+                    with open(seg_path, 'wb') as f:
+                        f.write(content)
+                    segment_files.append(seg_path)
+                    logger.info(f"Segmento {i:04d} baixado | Extensão: {ext} | Tamanho: {len(content)} bytes")
+                else:
+                    logger.error(f"Falha ao baixar segmento HLS {clean_url} (HTTP {resp.status})")
 
         if not segment_files:
             return None
 
-        # 7. Unindo os pedaços
         list_name = f"{base_name}_list.txt"
         list_path = os.path.join(output_dir, list_name)
         with open(list_path, 'w', encoding='utf-8') as f:
@@ -491,6 +485,7 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
 
         webm_name = f"{base_name}.webm"
         webm_output = os.path.join(output_dir, webm_name)
+        logger.info(f"Concatenando segmentos em {webm_name}...")
         
         cmd = ['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', list_name, '-c', 'copy', webm_name]
         
@@ -502,24 +497,29 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         )
         
         try:
-            await asyncio.wait_for(process.communicate(), timeout=600)
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=600)
         except asyncio.TimeoutError:
             try:
                 process.kill()
             except Exception:
                 pass
+            logger.error("FFmpeg concatenação timeout.")
             return None
         
         if process.returncode != 0:
+            logger.error("Falha na reconstrução HLS.")
+            logger.error(f"Motivo: FFmpeg falhou com código de retorno {process.returncode}")
             return None
+
+        logger.info(f"Resultado final da concatenação HLS: Sucesso. Salvo em {webm_output}")
 
         try:
             os.remove(m3u8_path)
             os.remove(list_path)
             for sf in segment_files:
                 os.remove(sf)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Erro ao limpar arquivos temporários HLS: {e}")
 
         return webm_output
 
@@ -580,8 +580,8 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
     asset_url = None
 
     if asset_type_id:
-        logger.info(f"Asset {asset_id} - Tentando obter URL de forma publica...")
-        asset_url = await fetch_asset_location(session, asset_id)
+        logger.info(f"Asset {asset_id} - Tentando obter URL de forma publica (com Cookie)...")
+        asset_url = await fetch_asset_location(session, asset_id, cookie=ROBLOX_COOKIE)
         
         if asset_url:
             logger.info(f"Asset {asset_id} - URL publica obtida com sucesso!")
@@ -638,7 +638,14 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
 
     try:
         logger.info(f"Asset URL: {asset_url}")
-        async with session.get(asset_url) as response:
+        
+        download_headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        }
+        if ROBLOX_COOKIE:
+            download_headers["Cookie"] = f".ROBLOSECURITY={ROBLOX_COOKIE}"
+
+        async with session.get(asset_url, headers=download_headers) as response:
             if response.status != 200:
                 msg = f"Asset {asset_id} - Falha no download HTTP {response.status}."
                 logger.error(msg)
@@ -837,10 +844,6 @@ async def asset(interaction: discord.Interaction, asset_id: str):
                 qual = view.audio_quality if has_a else view.video_quality
                 file_path = await convert_media(file_path, fmt, qual)
             
-            if not os.path.exists(file_path):
-                await interaction.edit_original_response(content=None, embed=discord.Embed(description="**❌ Erro:** Falha na conversão da mídia (O servidor pode ter ficado sem memória).", color=0x335fff), view=None)
-                return
-
             if os.path.getsize(file_path) > 10 * 1024 * 1024:
                 await interaction.edit_original_response(content=None, embed=discord.Embed(description="O arquivo convertido excede o limite de 10MB do Discord. Enviando para o Gofile...", color=0x335fff), view=None)
                 gofile_url = await upload_gofile(file_path)
