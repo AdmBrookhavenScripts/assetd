@@ -788,7 +788,7 @@ client = RobloxAssetBot()
 @client.tree.command(name="asset", description="Baixa um unico asset do Roblox de forma segura")
 async def asset(interaction: discord.Interaction, asset_id: str):
     state = {"current": 0, "total": 1, "running": True}
-    await interaction.response.send_message(embed=discord.Embed(description=f"**🕣 Processando... {state['current']}/{state['total']} Assets\n`🟩⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️`\n\nTempo estimado: 9s**", color=0x335fff))
+    await interaction.response.send_message(embed=discord.Embed(description=f"**🕣 Processando... {state['current']}/{state['total']} Assets\n🟩⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️\n\nTempo estimado: 9s**", color=0x335fff))
     
     async def progress_task():
         try:
@@ -798,7 +798,7 @@ async def asset(interaction: discord.Interaction, asset_id: str):
                 if not state["running"]:
                     break
                 i += 1
-                desc = f"**🕣 Processando... {state['current']}/{state['total']} Assets\n`{'🟩' * i}{'⬜️' * (10 - i)}`\n\nTempo estimado: {10 - i}s**"
+                desc = f"**🕣 Processando... {state['current']}/{state['total']} Assets\n{'🟩' * i}{'⬜️' * (10 - i)}\n\nTempo estimado: {10 - i}s**"
                 try:
                     await interaction.edit_original_response(content=None, embed=discord.Embed(description=desc, color=0x335fff))
                 except Exception:
@@ -821,7 +821,7 @@ async def asset(interaction: discord.Interaction, asset_id: str):
     except asyncio.CancelledError:
         pass
 
-    await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"**🕣 Processando... {state['total']}/{state['total']} Assets\n`🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩`\n\nTempo estimado: 0s**", color=0x335fff))
+    await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"**🕣 Processando... {state['total']}/{state['total']} Assets\n🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩\n\nTempo estimado: 0s**", color=0x335fff))
         
     if file_path and os.path.exists(file_path):
         has_a = file_path.endswith('.ogg')
@@ -872,7 +872,7 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
         return
 
     state = {"current": 0, "total": len(ids_list), "running": True}
-    await interaction.response.send_message(embed=discord.Embed(description=f"**🕣 Processando... 0/{state['total']} Assets\n`🟩⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️`\n\nTempo estimado: 13s**", color=0x335fff))
+    await interaction.response.send_message(embed=discord.Embed(description=f"**🕣 Processando... 0/{state['total']} Assets\n🟩⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️\n\nTempo estimado: 13s**", color=0x335fff))
     
     async def progress_task():
         try:
@@ -883,7 +883,7 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
                     break
                 i += 1
                 est = max(1, int((10 - i) * 1.5))
-                desc = f"**🕣 Processando... {state['current']}/{state['total']} Assets\n`{'🟩' * i}{'⬜️' * (10 - i)}`\n\nTempo estimado: {est}s**"
+                desc = f"**🕣 Processando... {state['current']}/{state['total']} Assets\n{'🟩' * i}{'⬜️' * (10 - i)}\n\nTempo estimado: {est}s**"
                 try:
                     await interaction.edit_original_response(content=None, embed=discord.Embed(description=desc, color=0x335fff))
                 except Exception:
@@ -928,7 +928,7 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
         pass
     
     try:
-        await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"**🕣 Processando... {state['total']}/{state['total']} Assets\n`🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩`\n\nTempo estimado: 0s**", color=0x335fff))
+        await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"**🕣 Processando... {state['total']}/{state['total']} Assets\n🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩\n\nTempo estimado: 0s**", color=0x335fff))
     except Exception:
         pass
 
@@ -996,7 +996,7 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
         if len(failed_ids) == 1:
             final_msg += failed_ids[0]
         else:
-            final_msg += ", ".join(f"`{i}`" for i in failed_ids)
+            final_msg += ", ".join(f"{i}" for i in failed_ids)
 
     try:
         if os.path.exists(zip_filename):
