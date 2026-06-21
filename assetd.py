@@ -580,8 +580,8 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
     asset_url = None
 
     if asset_type_id:
-        logger.info(f"Asset {asset_id} - Tentando obter URL de forma publica (com Cookie)...")
-        asset_url = await fetch_asset_location(session, asset_id, cookie=ROBLOX_COOKIE)
+        logger.info(f"Asset {asset_id} - Tentando obter URL de forma publica...")
+        asset_url = await fetch_asset_location(session, asset_id)
         
         if asset_url:
             logger.info(f"Asset {asset_id} - URL publica obtida com sucesso!")
@@ -638,14 +638,7 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
 
     try:
         logger.info(f"Asset URL: {asset_url}")
-        
-        download_headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-        }
-        if ROBLOX_COOKIE:
-            download_headers["Cookie"] = f".ROBLOSECURITY={ROBLOX_COOKIE}"
-
-        async with session.get(asset_url, headers=download_headers) as response:
+        async with session.get(asset_url) as response:
             if response.status != 200:
                 msg = f"Asset {asset_id} - Falha no download HTTP {response.status}."
                 logger.error(msg)
