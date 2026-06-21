@@ -346,6 +346,11 @@ async def convert_media(input_path: str, format: str, quality: str) -> str:
 async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, base_url: str) -> str:
     logger.info(f"Processando playlist HLS: {m3u8_path}")
     try:
+        # Extract CloudFront authentication query parameters from the original base_url
+        from urllib.parse import urlparse, urlunparse
+        parsed_base = urlparse(base_url)
+        auth_query = parsed_base.query
+
         with open(m3u8_path, 'r', encoding='utf-8') as f:
             m3u8_content = f.read()
 
@@ -390,16 +395,25 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
                         break
 
         def resolve_hls_url(target_path, rbx_base_uri):
+            # Resolve the base URL path
             if "{$RBX-BASE-URI}" in target_path:
-                return target_path.replace("{$RBX-BASE-URI}", rbx_base_uri.rstrip('/'))
-            
-            if not target_path.startswith('http'):
+                resolved = target_path.replace("{$RBX-BASE-URI}", rbx_base_uri.rstrip('/'))
+            elif not target_path.startswith('http'):
                 from urllib.parse import urljoin
-                return urljoin(rbx_base_uri, target_path)
+                resolved = urljoin(rbx_base_uri, target_path)
+            else:
+                resolved = target_path
                 
-            return target_path
+            # Append CloudFront auth query parameters to the resolved URL
+            if auth_query:
+                parsed_res = urlparse(resolved)
+                if not parsed_res.query:
+                    resolved = urlunparse(parsed_res._replace(query=auth_query))
+                else:
+                    resolved = f"{resolved}&{auth_query}"
+                    
+            return resolved
 
-        # CORREÇÃO: Os headers necessários para burlar o S3 / CloudFront
         cdn_headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
             "Referer": "https://www.roblox.com/",
@@ -436,7 +450,8 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
             if rbx_base_uri:
                 seg_url = resolve_hls_url(seg, rbx_base_uri)
             else:
-                seg_url = seg
+                # Still pass through resolve to append auth query if needed
+                seg_url = resolve_hls_url(seg, "")
             
             clean_url = seg_url.split('?')[0]
             filename = clean_url.split('/')[-1]
