@@ -404,7 +404,9 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
             parsed_master = urlparse(master_url)
             
             if not urlparse(target_path).query:
-                if parsed_joined.netloc == parsed_master.netloc:
+                if parsed_joined.netloc.endswith('rbxcdn.com') and parsed_master.netloc.endswith('rbxcdn.com'):
+                    joined = urlunparse(parsed_joined._replace(query=parsed_master.query))
+                elif not parsed_joined.netloc:
                     joined = urlunparse(parsed_joined._replace(query=parsed_master.query))
                 
             return joined
