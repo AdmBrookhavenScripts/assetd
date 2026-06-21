@@ -361,20 +361,18 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         with open(m3u8_path, 'r', encoding='utf-8') as f:
             m3u8_content = f.read()
 
-        # 2. Restaurar o RBX-BASE-URI
+        # 2. Restaurar o RBX-BASE-URI (Sem forçar a barra no final)
         rbx_base_uri = None
         for line in m3u8_content.splitlines():
             if line.startswith('#EXT-X-DEFINE:NAME="RBX-BASE-URI"'):
                 match = re.search(r'VALUE="([^"]+)"', line)
                 if match:
                     rbx_base_uri = match.group(1)
-                    if not rbx_base_uri.endswith('/'):
-                        rbx_base_uri += '/'
                     break
 
         lines = m3u8_content.splitlines()
 
-        # 3. Lógica restaurada para encontrar a melhor qualidade (Evita o UnboundLocalError)
+        # 3. Lógica restaurada para encontrar a melhor qualidade
         best_playlist_url = None
         max_bandwidth = 0
         for i, line in enumerate(lines):
@@ -387,14 +385,13 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
                         if i + 1 < len(lines) and not lines[i+1].startswith('#'):
                             best_playlist_url = lines[i+1].strip()
 
-        # 4. Função de resolução inteligente
-        # 4. Função de resolução inteligente
+        # 4. Função de resolução inteligente corrigida
         def resolve_hls_url(target_path):
             resolved = target_path
             
-            # Restaura a URI base se necessário
+            # Restaura a URI base com segurança, cortando barras sobressalentes
             if "{$RBX-BASE-URI}" in target_path and rbx_base_uri:
-                resolved = target_path.replace("{$RBX-BASE-URI}", rbx_base_uri)
+                resolved = target_path.replace("{$RBX-BASE-URI}", rbx_base_uri.rstrip('/'))
                 
             # Se a URL não for absoluta, junta com a base
             if not resolved.startswith('http'):
@@ -402,9 +399,10 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
                 force_base_url = base_url_no_query if base_url_no_query.endswith('/') else base_url_no_query + '/'
                 resolved = urljoin(force_base_url, resolved.lstrip('/'))
             
-            # CORREÇÃO: Garante que os parâmetros de autenticação (Policy, Signature, etc)
-            # sejam sempre adicionados, mesmo nas URLs absolutas do hls-segments.
-            if raw_query and 'Signature=' not in resolved:
+            # CORREÇÃO: Apenas injeta a query string original (Policy, Signature) 
+            # se estivermos operando no mesmo domínio da URL mestre.
+            req_parsed = urlparse(resolved)
+            if raw_query and 'Signature=' not in resolved and req_parsed.netloc == parsed_base.netloc:
                 resolved += ('&' if '?' in resolved else '?') + raw_query
                 
             return resolved
@@ -420,8 +418,6 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         async def fetch_hls_data(url):
             req_parsed = urlparse(url)
             
-            # CORREÇÃO: Envia os cookies de autenticação para QUALQUER subdomínio da rede Roblox.
-            # (Ex: fts.rbxcdn.com, hls-segments.rbxcdn.com, contentdelivery.roblox.com)
             is_roblox_domain = req_parsed.netloc.endswith('.rbxcdn.com') or req_parsed.netloc.endswith('.roblox.com')
             use_cookies = cf_cookies if is_roblox_domain else {}
             
@@ -433,7 +429,7 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
                     logger.error(f"Falha HTTP {resp.status} em {url} | Resposta: {text[:250]}")
                     return None
 
-        # 6. Fazendo download das playlists e segmentos usando a nova função
+        # 6. Fazendo download das playlists e segmentos
         if not best_playlist_url:
             best_playlist_url = base_url
             internal_m3u8_content = m3u8_content
