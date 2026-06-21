@@ -353,71 +353,54 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
 
         # 1. Separar os tokens do CloudFront para enviar como Cookie (evita erro no S3)
         # 1. Obter os cookies (opcional, mas não faz mal manter para o CloudFront)
+        # 1. Pegar a Query String bruta (NÃO use urlencode, pois ele destrói os '~' do Roblox)
+        raw_query = parsed_base.query
+        qs = parse_qs(raw_query)
+
         cf_cookies = {}
         if 'Policy' in qs: cf_cookies['CloudFront-Policy'] = qs['Policy'][0]
         if 'Signature' in qs: cf_cookies['CloudFront-Signature'] = qs['Signature'][0]
         if 'Key-Pair-Id' in qs: cf_cookies['CloudFront-Key-Pair-Id'] = qs['Key-Pair-Id'][0]
 
-        # 2. MUDANÇA CRÍTICA: Manter TODOS os tokens originais na Query String!
-        # O S3 pré-assinado rejeita a conexão com 403 se os parâmetros forem removidos da URL.
-        safe_query_string = urlencode(qs, doseq=True)
-
-        # 3. MÁGICA AQUI: Extrair o domínio exato e o caminho base da URL original.
-        # Nós garantimos que ele termina com '/' para usá-lo como o "diretório raiz" dos vídeos.
-        base_url_no_query = urlunparse((parsed_base.scheme, parsed_base.netloc, parsed_base.path, '', '', ''))
-        force_base_url = base_url_no_query if base_url_no_query.endswith('/') else base_url_no_query + '/'
-
         with open(m3u8_path, 'r', encoding='utf-8') as f:
             m3u8_content = f.read()
 
+        # 2. Restaurar o RBX-BASE-URI! Ele não é inútil, os vídeos reais estão lá.
+        rbx_base_uri = None
+        for line in m3u8_content.splitlines():
+            if line.startswith('#EXT-X-DEFINE:NAME="RBX-BASE-URI"'):
+                match = re.search(r'VALUE="([^"]+)"', line)
+                if match:
+                    rbx_base_uri = match.group(1)
+                    if not rbx_base_uri.endswith('/'):
+                        rbx_base_uri += '/'
+                    break
+
         lines = m3u8_content.splitlines()
 
-        # REMOVIDO: Não vamos mais tentar ler o "RBX-BASE-URI" do arquivo. 
-        # Ele muitas vezes aponta para o CDN errado e quebra o download.
+        # ... (seu código de verificação "best_playlist_url" fica intacto aqui no meio) ...
 
-        best_playlist_url = None
-        streams = []
-        
-        for i, line in enumerate(lines):
-            if line.startswith('#EXT-X-STREAM-INF'):
-                if i + 1 < len(lines):
-                    streams.append((line, lines[i+1]))
-        
-        if streams:
-            best_stream = None
-            max_height = -1
-
-            for info, url in streams:
-                res_match = re.search(r'RESOLUTION=\d+x(\d+)', info)
-                if res_match:
-                    height = int(res_match.group(1))
-                    if height > max_height:
-                        max_height = height
-                        best_stream = (info, url)
-
-            if best_stream:
-                best_playlist_url = best_stream[1]
-            else:
-                best_playlist_url = streams[0][1]
-                for info, url in streams:
-                    if '720' in info or '720' in url:
-                        best_playlist_url = url
-                        break
-
-        # 4. Nova função de resolução que FORÇA o uso do nosso CDN autenticado
+        # 4. Função de resolução inteligente
         def resolve_hls_url(target_path):
-            # Limpa a variável inútil do Roblox
-            clean_target = target_path.replace("{$RBX-BASE-URI}", "")
-            
-            if clean_target.startswith('http'):
-                resolved = clean_target
-            else:
-                # Junta o nome do arquivo interno com o nosso diretório base validado
-                resolved = urljoin(force_base_url, clean_target.lstrip('/'))
+            # Se o Roblox usar a variável {$RBX-BASE-URI} no arquivo
+            if "{$RBX-BASE-URI}" in target_path and rbx_base_uri:
+                resolved = target_path.replace("{$RBX-BASE-URI}", rbx_base_uri)
+                # IMPORTANTE: NÃO anexamos a raw_query aqui. 
+                # O hls-segments usa segurança por Hash na URL e vai dar erro 403 
+                # se receber o token feito especificamente para o fts.rbxcdn.com.
+                return resolved
                 
-            # Adiciona os tokens da Akamai (se existirem) na URL
-            if safe_query_string:
-                resolved += ('&' if '?' in resolved else '?') + safe_query_string
+            if target_path.startswith('http'):
+                return target_path
+
+            # Fallback padrão caso a M3U8 não use a base externa
+            base_url_no_query = urlunparse((parsed_base.scheme, parsed_base.netloc, parsed_base.path, '', '', ''))
+            force_base_url = base_url_no_query if base_url_no_query.endswith('/') else base_url_no_query + '/'
+            resolved = urljoin(force_base_url, target_path.lstrip('/'))
+            
+            # Só anexamos a query original se o arquivo estiver no mesmo servidor base
+            if raw_query:
+                resolved += ('&' if '?' in resolved else '?') + raw_query
                 
             return resolved
 
