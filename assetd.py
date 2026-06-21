@@ -352,14 +352,15 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         qs = parse_qs(parsed_base.query)
 
         # 1. Separar os tokens do CloudFront para enviar como Cookie (evita erro no S3)
+        # 1. Obter os cookies (opcional, mas não faz mal manter para o CloudFront)
         cf_cookies = {}
         if 'Policy' in qs: cf_cookies['CloudFront-Policy'] = qs['Policy'][0]
         if 'Signature' in qs: cf_cookies['CloudFront-Signature'] = qs['Signature'][0]
         if 'Key-Pair-Id' in qs: cf_cookies['CloudFront-Key-Pair-Id'] = qs['Key-Pair-Id'][0]
 
-        # 2. Manter tokens da Akamai na Query String
-        safe_qs = {k: v for k, v in qs.items() if k not in ['Policy', 'Signature', 'Key-Pair-Id', 'Expires']}
-        safe_query_string = urlencode(safe_qs, doseq=True)
+        # 2. MUDANÇA CRÍTICA: Manter TODOS os tokens originais na Query String!
+        # O S3 pré-assinado rejeita a conexão com 403 se os parâmetros forem removidos da URL.
+        safe_query_string = urlencode(qs, doseq=True)
 
         # 3. MÁGICA AQUI: Extrair o domínio exato e o caminho base da URL original.
         # Nós garantimos que ele termina com '/' para usá-lo como o "diretório raiz" dos vídeos.
