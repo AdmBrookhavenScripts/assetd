@@ -399,26 +399,44 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
                 logger.info(f"Stream selecionado (Fallback): {best_stream[0]}")
 
         def get_url_with_auth(base_path, target_path, master_url):
-            from urllib.parse import urljoin, urlparse, urlunparse, parse_qsl, urlencode
+            from urllib.parse import urljoin, urlparse, urlunparse
             
+            # Removemos a tag interna do Roblox para forçarmos o uso do caminho relativo
+            if "{$RBX-BASE-URI}" in target_path:
+                target_path = target_path.replace("{$RBX-BASE-URI}", "")
+                if target_path.startswith('/'):
+                    target_path = target_path[1:]
+            
+            parsed_base = urlparse(base_path)
+            
+            # Garante que o base_path atue como um diretório se for a URL mestre
+            if not parsed_base.path.endswith('/') and '.' not in parsed_base.path.split('/')[-1]:
+                base_path = urlunparse(parsed_base._replace(path=parsed_base.path + '/'))
+
             joined = urljoin(base_path, target_path)
             parsed_joined = urlparse(joined)
             parsed_master = urlparse(master_url)
             
-            if not urlparse(target_path).query and parsed_master.query:
-                if parsed_joined.netloc == parsed_master.netloc:
-                    joined = urlunparse(parsed_joined._replace(query=parsed_master.query))
-                else:
-                    params = parse_qsl(parsed_master.query)
+            # A MÁGICA ACONTECE AQUI:
+            # Se a URL tentar escapar para o S3 direto (hls-segments), nós interceptamos
+            # e reescrevemos a rota forçando a passar pela CDN (fts.rbxcdn.com).
+            if parsed_joined.netloc != parsed_master.netloc:
+                parts = parsed_joined.path.strip('/').split('/')
+                # Pega a resolução e o nome do arquivo (ex: 720/d4f1d533...m3u8)
+                clean_path = f"{parts[-2]}/{parts[-1]}" if len(parts) >= 2 else parts[-1]
                     
-                    aws_blocks = {'Signature', 'Policy', 'Key-Pair-Id', 'Expires', 'AWSAccessKeyId'}
-                    
-                    allowed = [(k, v) for k, v in params if k not in aws_blocks]
-                    
-                    if allowed:
-                        new_query = urlencode(allowed)
-                        joined = urlunparse(parsed_joined._replace(query=new_query))
-                    
+                master_dir = parsed_master.path
+                if not master_dir.endswith('/'):
+                    master_dir += '/'
+                
+                # Monta a nova URL baseada na CDN permitida
+                joined = f"{parsed_master.scheme}://{parsed_master.netloc}{master_dir}{clean_path}"
+                parsed_joined = urlparse(joined)
+
+            # Injeta as chaves da CDN (Policy, Signature, __token__) que garantem o acesso
+            if not parsed_joined.query and parsed_master.query:
+                joined = urlunparse(parsed_joined._replace(query=parsed_master.query))
+                
             return joined
 
         headers = {
@@ -426,26 +444,22 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
             "Referer": "https://www.roblox.com/",
             "Origin": "https://www.roblox.com",
             "Accept": "*/*",
-            "Cookie": f".ROBLOSECURITY={ROBLOX_COOKIE}"  # <--- Adicione esta linha
+            "Cookie": f".ROBLOSECURITY={ROBLOX_COOKIE}"
         }
 
         if not best_playlist_url:
             best_playlist_url = base_url
             internal_m3u8_content = m3u8_content
         else:
-            if "{$RBX-BASE-URI}" in best_playlist_url and rbx_base_uri:
-                best_playlist_url = best_playlist_url.replace(
-                    "{$RBX-BASE-URI}",
-                    rbx_base_uri.rstrip("/")
-                )
-            
+            # CÓDIGO LIMPO: Não fazemos mais replace manual de {$RBX-BASE-URI}.
+            # Deixamos a nova função get_url_with_auth fazer o roteamento inteligente.
             best_playlist_url = get_url_with_auth(
                 base_url,
                 best_playlist_url,
                 base_url
             )
 
-            logger.info(f"URL INTERNA (COM AUTH) = {best_playlist_url}")
+            logger.info(f"URL INTERNA (ROTA CDN) = {best_playlist_url}")
 
             async with session.get(best_playlist_url, headers=headers) as resp:
                 if resp.status != 200:
