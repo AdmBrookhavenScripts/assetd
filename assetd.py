@@ -388,18 +388,23 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
                             best_playlist_url = lines[i+1].strip()
 
         # 4. Função de resolução inteligente
+        # 4. Função de resolução inteligente
         def resolve_hls_url(target_path):
-            if "{$RBX-BASE-URI}" in target_path and rbx_base_uri:
-                return target_path.replace("{$RBX-BASE-URI}", rbx_base_uri)
-                
-            if target_path.startswith('http'):
-                return target_path
-
-            base_url_no_query = urlunparse((parsed_base.scheme, parsed_base.netloc, parsed_base.path, '', '', ''))
-            force_base_url = base_url_no_query if base_url_no_query.endswith('/') else base_url_no_query + '/'
-            resolved = urljoin(force_base_url, target_path.lstrip('/'))
+            resolved = target_path
             
-            if raw_query:
+            # Restaura a URI base se necessário
+            if "{$RBX-BASE-URI}" in target_path and rbx_base_uri:
+                resolved = target_path.replace("{$RBX-BASE-URI}", rbx_base_uri)
+                
+            # Se a URL não for absoluta, junta com a base
+            if not resolved.startswith('http'):
+                base_url_no_query = urlunparse((parsed_base.scheme, parsed_base.netloc, parsed_base.path, '', '', ''))
+                force_base_url = base_url_no_query if base_url_no_query.endswith('/') else base_url_no_query + '/'
+                resolved = urljoin(force_base_url, resolved.lstrip('/'))
+            
+            # CORREÇÃO: Garante que os parâmetros de autenticação (Policy, Signature, etc)
+            # sejam sempre adicionados, mesmo nas URLs absolutas do hls-segments.
+            if raw_query and 'Signature=' not in resolved:
                 resolved += ('&' if '?' in resolved else '?') + raw_query
                 
             return resolved
@@ -414,8 +419,11 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         # 5. Baixador inteligente: Evita erro 403 validando o escopo dos cookies
         async def fetch_hls_data(url):
             req_parsed = urlparse(url)
-            # Só envia os cookies se o domínio destino for IDÊNTICO ao base_url original
-            use_cookies = cf_cookies if req_parsed.netloc == parsed_base.netloc else {}
+            
+            # CORREÇÃO: Envia os cookies de autenticação para QUALQUER subdomínio da rede Roblox.
+            # (Ex: fts.rbxcdn.com, hls-segments.rbxcdn.com, contentdelivery.roblox.com)
+            is_roblox_domain = req_parsed.netloc.endswith('.rbxcdn.com') or req_parsed.netloc.endswith('.roblox.com')
+            use_cookies = cf_cookies if is_roblox_domain else {}
             
             async with session.get(url, headers=cdn_headers, cookies=use_cookies) as resp:
                 if resp.status == 200:
