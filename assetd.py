@@ -350,7 +350,6 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
             m3u8_content = f.read()
 
         lines = m3u8_content.splitlines()
-        logger.info(f"Tipo de playlist detectada. Primeiras linhas: {lines[:5]}")
 
         rbx_base_uri = None
         for line in lines:
@@ -359,7 +358,6 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
                 rbx_base_uri = match.group(1)
                 if not rbx_base_uri.endswith('/'):
                     rbx_base_uri += '/'
-                logger.info(f"RBX-BASE-URI detectado: {rbx_base_uri}")
                 break
 
         best_playlist_url = None
@@ -369,8 +367,6 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
             if line.startswith('#EXT-X-STREAM-INF'):
                 if i + 1 < len(lines):
                     streams.append((line, lines[i+1]))
-        
-        logger.info(f"Quantidade de streams encontrados: {len(streams)}")
         
         if streams:
             best_stream = None
@@ -386,17 +382,12 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
 
             if best_stream:
                 best_playlist_url = best_stream[1]
-                logger.info(f"Stream selecionado (Maior Resolução): {best_stream[0]}")
             else:
                 best_playlist_url = streams[0][1]
                 for info, url in streams:
                     if '720' in info or '720' in url:
                         best_playlist_url = url
-                        best_stream = (info, url)
                         break
-                if not best_stream:
-                    best_stream = streams[0]
-                logger.info(f"Stream selecionado (Fallback): {best_stream[0]}")
 
         def resolve_hls_url(target_path, rbx_base_uri):
             if "{$RBX-BASE-URI}" in target_path:
@@ -408,18 +399,8 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
                 
             return target_path
 
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            "Referer": "https://www.roblox.com/",
-            "Origin": "https://www.roblox.com",
-            "Accept": "*/*",
-            "Cookie": f".ROBLOSECURITY={ROBLOX_COOKIE}"
-        }
-
         cdn_headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Referer": "https://www.roblox.com/",
-            "Origin": "https://www.roblox.com",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
             "Accept": "*/*"
         }
 
@@ -428,8 +409,6 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
             internal_m3u8_content = m3u8_content
         else:
             best_playlist_url = resolve_hls_url(best_playlist_url, rbx_base_uri)
-
-            logger.info(f"URL INTERNA (CORRETA) = {best_playlist_url}")
 
             async with session.get(best_playlist_url, headers=cdn_headers) as resp:
                 if resp.status != 200:
@@ -440,15 +419,12 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         segments = [line for line in internal_m3u8_content.splitlines() if line and not line.startswith('#')]
         
         if not segments:
-            logger.error("Nenhum segmento encontrado na playlist HLS.")
             return None
 
         output_dir = os.path.dirname(m3u8_path) or '.'
         base_name = os.path.basename(m3u8_path).rsplit('.', 1)[0]
         
         segment_files = []
-        logger.info(f"Quantidade de segmentos encontrados: {len(segments)}")
-        logger.info(f"Baixando {len(segments)} segmentos HLS para {base_name}...")
         
         for i, seg in enumerate(segments):
             seg_url = resolve_hls_url(seg, rbx_base_uri)
@@ -468,7 +444,6 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
                     with open(seg_path, 'wb') as f:
                         f.write(content)
                     segment_files.append(seg_path)
-                    logger.info(f"Segmento {i:04d} baixado | Extensão: {ext} | Tamanho: {len(content)} bytes")
                 else:
                     logger.error(f"Falha ao baixar segmento HLS {clean_url} (HTTP {resp.status})")
 
@@ -483,7 +458,6 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
 
         webm_name = f"{base_name}.webm"
         webm_output = os.path.join(output_dir, webm_name)
-        logger.info(f"Concatenando segmentos em {webm_name}...")
         
         cmd = ['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', list_name, '-c', 'copy', webm_name]
         
@@ -495,29 +469,24 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         )
         
         try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=600)
+            await asyncio.wait_for(process.communicate(), timeout=600)
         except asyncio.TimeoutError:
             try:
                 process.kill()
             except Exception:
                 pass
-            logger.error("FFmpeg concatenação timeout.")
             return None
         
         if process.returncode != 0:
-            logger.error("Falha na reconstrução HLS.")
-            logger.error(f"Motivo: FFmpeg falhou com código de retorno {process.returncode}")
             return None
-
-        logger.info(f"Resultado final da concatenação HLS: Sucesso. Salvo em {webm_output}")
 
         try:
             os.remove(m3u8_path)
             os.remove(list_path)
             for sf in segment_files:
                 os.remove(sf)
-        except Exception as e:
-            logger.warning(f"Erro ao limpar arquivos temporários HLS: {e}")
+        except Exception:
+            pass
 
         return webm_output
 
