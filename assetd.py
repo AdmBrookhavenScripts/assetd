@@ -398,46 +398,15 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
                     best_stream = streams[0]
                 logger.info(f"Stream selecionado (Fallback): {best_stream[0]}")
 
-        def get_url_with_auth(base_path, target_path, master_url):
-            from urllib.parse import urljoin, urlparse, urlunparse
-            
-            # Removemos a tag interna do Roblox para forçarmos o uso do caminho relativo
+        def resolve_hls_url(target_path, rbx_base_uri):
             if "{$RBX-BASE-URI}" in target_path:
-                target_path = target_path.replace("{$RBX-BASE-URI}", "")
-                if target_path.startswith('/'):
-                    target_path = target_path[1:]
+                return target_path.replace("{$RBX-BASE-URI}", rbx_base_uri.rstrip('/'))
             
-            parsed_base = urlparse(base_path)
-            
-            # Garante que o base_path atue como um diretório se for a URL mestre
-            if not parsed_base.path.endswith('/') and '.' not in parsed_base.path.split('/')[-1]:
-                base_path = urlunparse(parsed_base._replace(path=parsed_base.path + '/'))
-
-            joined = urljoin(base_path, target_path)
-            parsed_joined = urlparse(joined)
-            parsed_master = urlparse(master_url)
-            
-            # A MÁGICA ACONTECE AQUI:
-            # Se a URL tentar escapar para o S3 direto (hls-segments), nós interceptamos
-            # e reescrevemos a rota forçando a passar pela CDN (fts.rbxcdn.com).
-            if parsed_joined.netloc != parsed_master.netloc:
-                parts = parsed_joined.path.strip('/').split('/')
-                # Pega a resolução e o nome do arquivo (ex: 720/d4f1d533...m3u8)
-                clean_path = f"{parts[-2]}/{parts[-1]}" if len(parts) >= 2 else parts[-1]
-                    
-                master_dir = parsed_master.path
-                if not master_dir.endswith('/'):
-                    master_dir += '/'
+            if not target_path.startswith('http'):
+                from urllib.parse import urljoin
+                return urljoin(rbx_base_uri, target_path)
                 
-                # Monta a nova URL baseada na CDN permitida
-                joined = f"{parsed_master.scheme}://{parsed_master.netloc}{master_dir}{clean_path}"
-                parsed_joined = urlparse(joined)
-
-            # Injeta as chaves da CDN (Policy, Signature, __token__) que garantem o acesso
-            if not parsed_joined.query and parsed_master.query:
-                joined = urlunparse(parsed_joined._replace(query=parsed_master.query))
-                
-            return joined
+            return target_path
 
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -447,21 +416,22 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
             "Cookie": f".ROBLOSECURITY={ROBLOX_COOKIE}"
         }
 
+        cdn_headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Referer": "https://www.roblox.com/",
+            "Origin": "https://www.roblox.com",
+            "Accept": "*/*"
+        }
+
         if not best_playlist_url:
             best_playlist_url = base_url
             internal_m3u8_content = m3u8_content
         else:
-            # CÓDIGO LIMPO: Não fazemos mais replace manual de {$RBX-BASE-URI}.
-            # Deixamos a nova função get_url_with_auth fazer o roteamento inteligente.
-            best_playlist_url = get_url_with_auth(
-                base_url,
-                best_playlist_url,
-                base_url
-            )
+            best_playlist_url = resolve_hls_url(best_playlist_url, rbx_base_uri)
 
-            logger.info(f"URL INTERNA (ROTA CDN) = {best_playlist_url}")
+            logger.info(f"URL INTERNA (CORRETA) = {best_playlist_url}")
 
-            async with session.get(best_playlist_url, headers=headers) as resp:
+            async with session.get(best_playlist_url, headers=cdn_headers) as resp:
                 if resp.status != 200:
                     logger.error(f"Falha ao baixar playlist interna: {resp.status}")
                     return None
@@ -480,10 +450,8 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         logger.info(f"Quantidade de segmentos encontrados: {len(segments)}")
         logger.info(f"Baixando {len(segments)} segmentos HLS para {base_name}...")
         
-        segments_base_path = best_playlist_url
-
         for i, seg in enumerate(segments):
-            seg_url = get_url_with_auth(segments_base_path, seg, base_url)
+            seg_url = resolve_hls_url(seg, rbx_base_uri)
             
             clean_url = seg_url.split('?')[0]
             filename = clean_url.split('/')[-1]
@@ -494,7 +462,7 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
             
             seg_path = os.path.join(output_dir, f"{base_name}_seg_{i:04d}{ext}")
             
-            async with session.get(seg_url, headers=headers) as resp:
+            async with session.get(seg_url, headers=cdn_headers) as resp:
                 if resp.status == 200:
                     content = await resp.read()
                     with open(seg_path, 'wb') as f:
