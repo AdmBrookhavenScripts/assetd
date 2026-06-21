@@ -346,10 +346,20 @@ async def convert_media(input_path: str, format: str, quality: str) -> str:
 async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, base_url: str) -> str:
     logger.info(f"Processando playlist HLS: {m3u8_path}")
     try:
-        # Extract CloudFront authentication query parameters from the original base_url
-        from urllib.parse import urlparse, urlunparse
+        from urllib.parse import urlparse, parse_qs, urljoin
+        
+        # 1. Extrair os parâmetros de query da URL base pública
         parsed_base = urlparse(base_url)
-        auth_query = parsed_base.query
+        qs = parse_qs(parsed_base.query)
+        
+        # 2. Converter os parâmetros em CloudFront Signed Cookies
+        cf_cookies = {}
+        if 'Policy' in qs:
+            cf_cookies['CloudFront-Policy'] = qs['Policy'][0]
+        if 'Signature' in qs:
+            cf_cookies['CloudFront-Signature'] = qs['Signature'][0]
+        if 'Key-Pair-Id' in qs:
+            cf_cookies['CloudFront-Key-Pair-Id'] = qs['Key-Pair-Id'][0]
 
         with open(m3u8_path, 'r', encoding='utf-8') as f:
             m3u8_content = f.read()
@@ -395,23 +405,13 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
                         break
 
         def resolve_hls_url(target_path, rbx_base_uri):
-            # Resolve the base URL path
+            # Resolve the base URL path LIMPA (sem query strings)
             if "{$RBX-BASE-URI}" in target_path:
                 resolved = target_path.replace("{$RBX-BASE-URI}", rbx_base_uri.rstrip('/'))
             elif not target_path.startswith('http'):
-                from urllib.parse import urljoin
                 resolved = urljoin(rbx_base_uri, target_path)
             else:
                 resolved = target_path
-                
-            # Append CloudFront auth query parameters to the resolved URL
-            if auth_query:
-                parsed_res = urlparse(resolved)
-                if not parsed_res.query:
-                    resolved = urlunparse(parsed_res._replace(query=auth_query))
-                else:
-                    resolved = f"{resolved}&{auth_query}"
-                    
             return resolved
 
         cdn_headers = {
@@ -428,7 +428,8 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
             if rbx_base_uri:
                 best_playlist_url = resolve_hls_url(best_playlist_url, rbx_base_uri)
 
-            async with session.get(best_playlist_url, headers=cdn_headers) as resp:
+            # 3. Baixar a playlist interna enviando os cookies de autenticação
+            async with session.get(best_playlist_url, headers=cdn_headers, cookies=cf_cookies) as resp:
                 if resp.status != 200:
                     text = await resp.text()
                     logger.error(f"Falha ao baixar playlist interna: {resp.status} | Resposta S3: {text[:250]}")
@@ -447,22 +448,16 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         segment_files = []
         
         for i, seg in enumerate(segments):
-            if rbx_base_uri:
-                seg_url = resolve_hls_url(seg, rbx_base_uri)
-            else:
-                # Still pass through resolve to append auth query if needed
-                seg_url = resolve_hls_url(seg, "")
+            seg_url = resolve_hls_url(seg, rbx_base_uri if rbx_base_uri else "")
             
             clean_url = seg_url.split('?')[0]
             filename = clean_url.split('/')[-1]
-            if '.' in filename:
-                ext = '.' + filename.split('.')[-1]
-            else:
-                ext = '.webm'
+            ext = '.' + filename.split('.')[-1] if '.' in filename else '.webm'
             
             seg_path = os.path.join(output_dir, f"{base_name}_seg_{i:04d}{ext}")
             
-            async with session.get(seg_url, headers=cdn_headers) as resp:
+            # 4. Baixar os segmentos enviando os cookies de autenticação
+            async with session.get(seg_url, headers=cdn_headers, cookies=cf_cookies) as resp:
                 if resp.status == 200:
                     content = await resp.read()
                     with open(seg_path, 'wb') as f:
