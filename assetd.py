@@ -399,8 +399,11 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
                 
             return target_path
 
+        # CORREÇÃO: Os headers necessários para burlar o S3 / CloudFront
         cdn_headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Referer": "https://www.roblox.com/",
+            "Origin": "https://www.roblox.com",
             "Accept": "*/*"
         }
 
@@ -408,17 +411,20 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
             best_playlist_url = base_url
             internal_m3u8_content = m3u8_content
         else:
-            best_playlist_url = resolve_hls_url(best_playlist_url, rbx_base_uri)
+            if rbx_base_uri:
+                best_playlist_url = resolve_hls_url(best_playlist_url, rbx_base_uri)
 
             async with session.get(best_playlist_url, headers=cdn_headers) as resp:
                 if resp.status != 200:
-                    logger.error(f"Falha ao baixar playlist interna: {resp.status}")
+                    text = await resp.text()
+                    logger.error(f"Falha ao baixar playlist interna: {resp.status} | Resposta S3: {text[:250]}")
                     return None
                 internal_m3u8_content = await resp.text()
 
         segments = [line for line in internal_m3u8_content.splitlines() if line and not line.startswith('#')]
         
         if not segments:
+            logger.error("Nenhum segmento encontrado.")
             return None
 
         output_dir = os.path.dirname(m3u8_path) or '.'
@@ -427,7 +433,10 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         segment_files = []
         
         for i, seg in enumerate(segments):
-            seg_url = resolve_hls_url(seg, rbx_base_uri)
+            if rbx_base_uri:
+                seg_url = resolve_hls_url(seg, rbx_base_uri)
+            else:
+                seg_url = seg
             
             clean_url = seg_url.split('?')[0]
             filename = clean_url.split('/')[-1]
@@ -445,7 +454,8 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
                         f.write(content)
                     segment_files.append(seg_path)
                 else:
-                    logger.error(f"Falha ao baixar segmento HLS {clean_url} (HTTP {resp.status})")
+                    text = await resp.text()
+                    logger.error(f"Falha ao baixar segmento HLS {clean_url} (HTTP {resp.status}): {text[:100]}")
 
         if not segment_files:
             return None
