@@ -346,42 +346,33 @@ async def convert_media(input_path: str, format: str, quality: str) -> str:
 async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, base_url: str) -> str:
     logger.info(f"Processando playlist HLS: {m3u8_path}")
     try:
-        from urllib.parse import urlparse, urljoin, parse_qs, urlencode
+        from urllib.parse import urlparse, urljoin, parse_qs, urlencode, urlunparse
         
         parsed_base = urlparse(base_url)
         qs = parse_qs(parsed_base.query)
 
-        # 1. Separar os tokens do CloudFront para enviar OBRIGATORIAMENTE via Cookie
+        # 1. Separar os tokens do CloudFront para enviar como Cookie (evita erro no S3)
         cf_cookies = {}
-        if 'Policy' in qs:
-            cf_cookies['CloudFront-Policy'] = qs['Policy'][0]
-        if 'Signature' in qs:
-            cf_cookies['CloudFront-Signature'] = qs['Signature'][0]
-        if 'Key-Pair-Id' in qs:
-            cf_cookies['CloudFront-Key-Pair-Id'] = qs['Key-Pair-Id'][0]
+        if 'Policy' in qs: cf_cookies['CloudFront-Policy'] = qs['Policy'][0]
+        if 'Signature' in qs: cf_cookies['CloudFront-Signature'] = qs['Signature'][0]
+        if 'Key-Pair-Id' in qs: cf_cookies['CloudFront-Key-Pair-Id'] = qs['Key-Pair-Id'][0]
 
-        # 2. Manter tokens da Akamai (__token__, hdnts, etc) na Query String. 
-        # Removemos a Signature e Policy da URL para o S3 da Amazon não tentar validar e dar erro!
-        safe_qs = {}
-        for k, v in qs.items():
-            if k not in ['Policy', 'Signature', 'Key-Pair-Id', 'Expires']:
-                safe_qs[k] = v
-        
+        # 2. Manter tokens da Akamai na Query String
+        safe_qs = {k: v for k, v in qs.items() if k not in ['Policy', 'Signature', 'Key-Pair-Id', 'Expires']}
         safe_query_string = urlencode(safe_qs, doseq=True)
+
+        # 3. MÁGICA AQUI: Extrair o domínio exato e o caminho base da URL original.
+        # Nós garantimos que ele termina com '/' para usá-lo como o "diretório raiz" dos vídeos.
+        base_url_no_query = urlunparse((parsed_base.scheme, parsed_base.netloc, parsed_base.path, '', '', ''))
+        force_base_url = base_url_no_query if base_url_no_query.endswith('/') else base_url_no_query + '/'
 
         with open(m3u8_path, 'r', encoding='utf-8') as f:
             m3u8_content = f.read()
 
         lines = m3u8_content.splitlines()
 
-        rbx_base_uri = None
-        for line in lines:
-            match = re.search(r'#EXT-X-DEFINE:NAME="RBX-BASE-URI",VALUE="([^"]+)"', line)
-            if match:
-                rbx_base_uri = match.group(1)
-                if not rbx_base_uri.endswith('/'):
-                    rbx_base_uri += '/'
-                break
+        # REMOVIDO: Não vamos mais tentar ler o "RBX-BASE-URI" do arquivo. 
+        # Ele muitas vezes aponta para o CDN errado e quebra o download.
 
         best_playlist_url = None
         streams = []
@@ -412,21 +403,21 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
                         best_playlist_url = url
                         break
 
-        def resolve_hls_url(target_path, rbx_base_uri, query_string):
-            if "{$RBX-BASE-URI}" in target_path:
-                resolved = target_path.replace("{$RBX-BASE-URI}", rbx_base_uri.rstrip('/'))
-            elif not target_path.startswith('http'):
-                resolved = urljoin(rbx_base_uri, target_path)
+        # 4. Nova função de resolução que FORÇA o uso do nosso CDN autenticado
+        def resolve_hls_url(target_path):
+            # Limpa a variável inútil do Roblox
+            clean_target = target_path.replace("{$RBX-BASE-URI}", "")
+            
+            if clean_target.startswith('http'):
+                resolved = clean_target
             else:
-                resolved = target_path
+                # Junta o nome do arquivo interno com o nosso diretório base validado
+                resolved = urljoin(force_base_url, clean_target.lstrip('/'))
                 
-            # Injeta apenas a URL limpa (sem os tokens que quebram o S3)
-            if query_string:
-                if '?' in resolved:
-                    resolved += '&' + query_string
-                else:
-                    resolved += '?' + query_string
-                    
+            # Adiciona os tokens da Akamai (se existirem) na URL
+            if safe_query_string:
+                resolved += ('&' if '?' in resolved else '?') + safe_query_string
+                
             return resolved
 
         cdn_headers = {
@@ -440,9 +431,9 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
             best_playlist_url = base_url
             internal_m3u8_content = m3u8_content
         else:
-            best_playlist_url = resolve_hls_url(best_playlist_url, rbx_base_uri if rbx_base_uri else "", safe_query_string)
+            best_playlist_url = resolve_hls_url(best_playlist_url)
 
-            # 3. Baixar a playlist interna passando a safe_query_string na URL E OS COOKIES!
+            # Baixando playlist interna forçando Cookies + Query String limpa
             async with session.get(best_playlist_url, headers=cdn_headers, cookies=cf_cookies) as resp:
                 if resp.status != 200:
                     text = await resp.text()
@@ -462,7 +453,7 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         segment_files = []
         
         for i, seg in enumerate(segments):
-            seg_url = resolve_hls_url(seg, rbx_base_uri if rbx_base_uri else "", safe_query_string)
+            seg_url = resolve_hls_url(seg)
             
             clean_url = seg_url.split('?')[0]
             filename = clean_url.split('/')[-1]
@@ -470,7 +461,7 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
             
             seg_path = os.path.join(output_dir, f"{base_name}_seg_{i:04d}{ext}")
             
-            # 4. Baixar os segmentos de vídeo usando Cookies para os tokens do CloudFront
+            # Baixando os pedaços de vídeo
             async with session.get(seg_url, headers=cdn_headers, cookies=cf_cookies) as resp:
                 if resp.status == 200:
                     content = await resp.read()
