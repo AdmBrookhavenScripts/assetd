@@ -404,9 +404,7 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
             parsed_master = urlparse(master_url)
             
             if not urlparse(target_path).query:
-                if parsed_joined.netloc.endswith('rbxcdn.com') and parsed_master.netloc.endswith('rbxcdn.com'):
-                    joined = urlunparse(parsed_joined._replace(query=parsed_master.query))
-                elif not parsed_joined.netloc:
+                if parsed_joined.netloc == parsed_master.netloc:
                     joined = urlunparse(parsed_joined._replace(query=parsed_master.query))
                 
             return joined
@@ -424,12 +422,12 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
                     "{$RBX-BASE-URI}",
                     rbx_base_uri.rstrip("/")
                 )
-            
-            best_playlist_url = get_url_with_auth(
-                base_url,
-                best_playlist_url,
-                base_url
-            )            
+            else:
+                best_playlist_url = get_url_with_auth(
+                    base_url,
+                    best_playlist_url,
+                    base_url
+                )
 
             logger.info(f"URL INTERNA = {best_playlist_url}")
 
@@ -640,13 +638,7 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
 
     try:
         logger.info(f"Asset URL: {asset_url}")
-        
-        download_headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            "Accept": "*/*"
-        }
-        
-        async with session.get(asset_url, headers=download_headers) as response:
+        async with session.get(asset_url) as response:
             if response.status != 200:
                 msg = f"Asset {asset_id} - Falha no download HTTP {response.status}."
                 logger.error(msg)
