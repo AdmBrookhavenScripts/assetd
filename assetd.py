@@ -351,11 +351,14 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         webm_name = f"{base_name}.webm"
         webm_output = os.path.join(output_dir, webm_name)
         
+        # Passamos um user-agent válido para o ffmpeg evitar bloqueios na CDN da Roblox
         user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         
+        # Forçamos o formato HLS (-f hls) antes do input, pois a URL da Roblox não tem extensão .m3u8 no final
         cmd = [
             'ffmpeg', '-y',
             '-user_agent', user_agent,
+            '-f', 'hls',
             '-i', base_url,            
             '-c', 'copy', 
             webm_name
