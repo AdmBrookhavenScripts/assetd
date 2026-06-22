@@ -376,17 +376,6 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
             "Accept: */*\r\n"
         )
         
-        # Agora usamos -headers para garantir que seja propagado para os segmentos HLS
-        cmd = [
-            'ffmpeg', '-y',
-            '-allowed_extensions', 'ALL',
-            '-protocol_whitelist', 'file,http,https,tcp,tls,crypto',
-            '-headers', custom_headers,
-            '-i', local_url,          
-            '-c', 'copy', 
-            webm_name
-        ]
-        
         # --- SOLUÇÃO PARA FFMPEG 7.x: Servidor HTTP Local Temporário ---
         from aiohttp import web
         app = web.Application()
@@ -402,16 +391,16 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         site = web.TCPSite(runner, '127.0.0.1', 0)
         await site.start()
         
-        # Obtém a porta alocada dinamicamente
+        # Obtém a porta alocada dinamicamente e monta a URL local
         port = site._server.sockets[0].getsockname()[1]
         local_url = f"http://127.0.0.1:{port}/playlist.m3u8"
         
-        # Agora usamos -user_agent apontando para uma URL HTTP local
+        # Monta o comando correto do FFmpeg usando as variáveis criadas no tempo correto
         cmd = [
             'ffmpeg', '-y',
             '-allowed_extensions', 'ALL',
             '-protocol_whitelist', 'file,http,https,tcp,tls,crypto',
-            '-user_agent', user_agent,
+            '-headers', custom_headers,
             '-f', 'hls',
             '-i', local_url,          
             '-c', 'copy', 
