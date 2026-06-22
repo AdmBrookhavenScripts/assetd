@@ -365,6 +365,7 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         
         output_dir = os.path.dirname(m3u8_path) or '.'
         base_name = os.path.basename(m3u8_path).rsplit('.', 1)[0]
+        m3u8_filename = os.path.basename(m3u8_path) # Pegamos apenas o nome do arquivo
         webm_name = f"{base_name}.webm"
         webm_output = os.path.join(output_dir, webm_name)
         
@@ -372,14 +373,13 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         user_agent = "Roblox/WinInet"
         
         # Agora o FFmpeg lê o arquivo local modificado. 
-        # Liberamos o whitelist de protocolos para ele poder baixar os links HTTP/HTTPS contidos no arquivo local.
         cmd = [
             'ffmpeg', '-y',
             '-user_agent', user_agent,
             '-allowed_extensions', 'ALL',
             '-protocol_whitelist', 'file,http,https,tcp,tls,crypto',
             '-f', 'hls',
-            '-i', m3u8_path,            
+            '-i', m3u8_filename,  # <- CORREÇÃO: Passando apenas o nome do arquivo, já que o cwd cuida da pasta          
             '-c', 'copy', 
             webm_name
         ]
@@ -389,7 +389,7 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
             *cmd, 
             stdout=asyncio.subprocess.PIPE, 
             stderr=asyncio.subprocess.PIPE,
-            cwd=os.path.abspath(output_dir)
+            cwd=os.path.abspath(output_dir) # O FFmpeg já está rodando dentro de "downloaded_assets"
         )
         
         try:
