@@ -350,53 +350,28 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         with open(m3u8_path, 'r', encoding='utf-8') as f:
             content = f.read()
 
-        # 1. Extrair a query string (tokens Akamai/CloudFront) da URL original assinada
-        parsed_url = urlparse(base_url)
-        query_string = parsed_url.query
-
-        # 2. Encontrar a variável RBX-BASE-URI declarada pela Roblox
+        # 1. Encontrar a variável RBX-BASE-URI declarada pela Roblox
         match = re.search(r'#EXT-X-DEFINE:NAME="RBX-BASE-URI",VALUE="([^"]+)"', content)
-        rbx_base_uri = match.group(1) if match else None
-        
-        # 3. Reescrever o arquivo reconstruindo as URLs de segmento com os tokens
-        new_lines = []
-        for line in content.splitlines():
-            stripped_line = line.strip()
-            if not stripped_line:
-                continue
-                
-            # Identifica se a linha é uma URL de segmento/playlist (linhas que não começam com #)
-            if not stripped_line.startswith("#"):
-                
-                # Substitui a tag pelo link base real
-                if rbx_base_uri and "{$RBX-BASE-URI}" in stripped_line:
-                    stripped_line = stripped_line.replace("{$RBX-BASE-URI}", rbx_base_uri)
-                
-                # Anexa os tokens de segurança à URL para evitar o erro 403
-                if query_string:
-                    sep = "&" if "?" in stripped_line else "?"
-                    stripped_line = f"{stripped_line}{sep}{query_string}"
-                    
-            new_lines.append(stripped_line)
-            
-        content = "\n".join(new_lines)
+        if match:
+            rbx_base_uri = match.group(1)
+            # Substituir as referências literais pela URL real da CDN
+            content = content.replace("{$RBX-BASE-URI}", rbx_base_uri)
         
         with open(m3u8_path, 'w', encoding='utf-8') as f:
             f.write(content)
             
-        logger.info("Variável {$RBX-BASE-URI} e Tokens CDN aplicados com sucesso nas URLs internas.")
+        logger.info("Variável {$RBX-BASE-URI} substituída com sucesso no arquivo local.")
         
         output_dir = os.path.dirname(m3u8_path) or '.'
         base_name = os.path.basename(m3u8_path).rsplit('.', 1)[0]
         webm_name = f"{base_name}.webm"
         webm_output = os.path.join(output_dir, webm_name)
         
-        # Cabeçalhos forjados de navegador comum para evitar bloqueios secundários de WAF
-        custom_headers = (
-            "Accept: */*\r\n"
-            "Origin: https://www.roblox.com\r\n"
-            "Referer: https://www.roblox.com/\r\n"
-        )
+        # --- O PULO DO GATO ---
+        # Removido os tokens falhos. Adicionado o Cookie oficial e o User-Agent do client.
+        custom_headers = "Accept: */*\r\n"
+        if ROBLOX_COOKIE:
+            custom_headers += f"Cookie: .ROBLOSECURITY={ROBLOX_COOKIE}\r\n"
         
         from aiohttp import web
         app = web.Application()
@@ -418,7 +393,7 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
             'ffmpeg', '-y',
             '-allowed_extensions', 'ALL',
             '-protocol_whitelist', 'file,http,https,tcp,tls,crypto',
-            '-user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            '-user_agent', 'Roblox/WinInet',  # Simula perfeitamente o client do Roblox
             '-headers', custom_headers,
             '-f', 'hls',
             '-i', local_url,          
