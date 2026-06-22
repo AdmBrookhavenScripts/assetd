@@ -369,8 +369,23 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         webm_name = f"{base_name}.webm"
         webm_output = os.path.join(output_dir, webm_name)
         
-        # Disfarçar o FFmpeg como o cliente oficial do Roblox para evitar Access Denied
-        user_agent = "Roblox/WinInet"
+        # Disfarçar o FFmpeg como o cliente oficial do Roblox com todos os headers necessários
+        custom_headers = (
+            "User-Agent: Roblox/WinInet\r\n"
+            "Roblox-Browser-Asset-Request: false\r\n"
+            "Accept: */*\r\n"
+        )
+        
+        # Agora usamos -headers para garantir que seja propagado para os segmentos HLS
+        cmd = [
+            'ffmpeg', '-y',
+            '-allowed_extensions', 'ALL',
+            '-protocol_whitelist', 'file,http,https,tcp,tls,crypto',
+            '-headers', custom_headers,
+            '-i', local_url,          
+            '-c', 'copy', 
+            webm_name
+        ]
         
         # --- SOLUÇÃO PARA FFMPEG 7.x: Servidor HTTP Local Temporário ---
         from aiohttp import web
