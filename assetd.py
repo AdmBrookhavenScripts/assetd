@@ -369,12 +369,15 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         webm_name = f"{base_name}.webm"
         webm_output = os.path.join(output_dir, webm_name)
         
-        # Disfarçar o FFmpeg como o cliente oficial do Roblox com todos os headers necessários
+        # --- CORREÇÃO AQUI ---
+        # Separamos o User-Agent nativo para não duplicar cabeçalhos
         custom_headers = (
-            "User-Agent: Roblox/WinInet\r\n"
             "Roblox-Browser-Asset-Request: false\r\n"
             "Accept: */*\r\n"
         )
+        # Adicionamos o cookie de segurança para liberar os segmentos da CDN
+        if ROBLOX_COOKIE:
+            custom_headers += f"Cookie: .ROBLOSECURITY={ROBLOX_COOKIE}\r\n"
         
         # --- SOLUÇÃO PARA FFMPEG 7.x: Servidor HTTP Local Temporário ---
         from aiohttp import web
@@ -395,11 +398,12 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         port = site._server.sockets[0].getsockname()[1]
         local_url = f"http://127.0.0.1:{port}/playlist.m3u8"
         
-        # Monta o comando correto do FFmpeg usando as variáveis criadas no tempo correto
+        # Monta o comando correto usando a flag -user_agent dedicada
         cmd = [
             'ffmpeg', '-y',
             '-allowed_extensions', 'ALL',
             '-protocol_whitelist', 'file,http,https,tcp,tls,crypto',
+            '-user_agent', 'Roblox/WinInet',
             '-headers', custom_headers,
             '-f', 'hls',
             '-i', local_url,          
