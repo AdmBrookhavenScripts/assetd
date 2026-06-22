@@ -347,29 +347,51 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
     logger.info(f"Processando playlist HLS via FFmpeg (com pré-processamento): {m3u8_path}")
     runner = None
     try:
-        # 1. Ler o arquivo m3u8 original baixado
         with open(m3u8_path, 'r', encoding='utf-8') as f:
             content = f.read()
 
+        # 1. Extrair a query string (tokens Akamai/CloudFront) da URL original assinada
+        parsed_url = urlparse(base_url)
+        query_string = parsed_url.query
+
         # 2. Encontrar a variável RBX-BASE-URI declarada pela Roblox
         match = re.search(r'#EXT-X-DEFINE:NAME="RBX-BASE-URI",VALUE="([^"]+)"', content)
-        if match:
-            rbx_base_uri = match.group(1)
+        rbx_base_uri = match.group(1) if match else None
+        
+        # 3. Reescrever o arquivo reconstruindo as URLs de segmento com os tokens
+        new_lines = []
+        for line in content.splitlines():
+            stripped_line = line.strip()
+            if not stripped_line:
+                continue
+                
+            # Identifica se a linha é uma URL de segmento/playlist (linhas que não começam com #)
+            if not stripped_line.startswith("#"):
+                
+                # Substitui a tag pelo link base real
+                if rbx_base_uri and "{$RBX-BASE-URI}" in stripped_line:
+                    stripped_line = stripped_line.replace("{$RBX-BASE-URI}", rbx_base_uri)
+                
+                # Anexa os tokens de segurança à URL para evitar o erro 403
+                if query_string:
+                    sep = "&" if "?" in stripped_line else "?"
+                    stripped_line = f"{stripped_line}{sep}{query_string}"
+                    
+            new_lines.append(stripped_line)
             
-            # 3. Substituir as referências literais pela URL real
-            content = content.replace("{$RBX-BASE-URI}", rbx_base_uri)
+        content = "\n".join(new_lines)
+        
+        with open(m3u8_path, 'w', encoding='utf-8') as f:
+            f.write(content)
             
-            with open(m3u8_path, 'w', encoding='utf-8') as f:
-                f.write(content)
-            logger.info("Variável {$RBX-BASE-URI} substituída com sucesso no arquivo local.")
+        logger.info("Variável {$RBX-BASE-URI} e Tokens CDN aplicados com sucesso nas URLs internas.")
         
         output_dir = os.path.dirname(m3u8_path) or '.'
         base_name = os.path.basename(m3u8_path).rsplit('.', 1)[0]
         webm_name = f"{base_name}.webm"
         webm_output = os.path.join(output_dir, webm_name)
         
-        # --- CORREÇÃO AQUI ---
-        # Sem Cookie! Cabeçalhos forjados de navegador comum para passar direto pelo Cloudflare/WAF.
+        # Cabeçalhos forjados de navegador comum para evitar bloqueios secundários de WAF
         custom_headers = (
             "Accept: */*\r\n"
             "Origin: https://www.roblox.com\r\n"
@@ -392,7 +414,6 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         port = site._server.sockets[0].getsockname()[1]
         local_url = f"http://127.0.0.1:{port}/playlist.m3u8"
         
-        # O User-Agent foi trocado para um Chrome genérico atualizado.
         cmd = [
             'ffmpeg', '-y',
             '-allowed_extensions', 'ALL',
