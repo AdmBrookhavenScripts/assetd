@@ -356,10 +356,9 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         if match:
             rbx_base_uri = match.group(1)
             
-            # 3. Substituir as referências literais pela URL real (S3)
+            # 3. Substituir as referências literais pela URL real
             content = content.replace("{$RBX-BASE-URI}", rbx_base_uri)
             
-            # Reescrever o arquivo local com as URLs absolutas já corrigidas
             with open(m3u8_path, 'w', encoding='utf-8') as f:
                 f.write(content)
             logger.info("Variável {$RBX-BASE-URI} substituída com sucesso no arquivo local.")
@@ -370,16 +369,13 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         webm_output = os.path.join(output_dir, webm_name)
         
         # --- CORREÇÃO AQUI ---
-        # Separamos o User-Agent nativo para não duplicar cabeçalhos
+        # Sem Cookie! Cabeçalhos forjados de navegador comum para passar direto pelo Cloudflare/WAF.
         custom_headers = (
-            "Roblox-Browser-Asset-Request: false\r\n"
             "Accept: */*\r\n"
+            "Origin: https://www.roblox.com\r\n"
+            "Referer: https://www.roblox.com/\r\n"
         )
-        # Adicionamos o cookie de segurança para liberar os segmentos da CDN
-        if ROBLOX_COOKIE:
-            custom_headers += f"Cookie: .ROBLOSECURITY={ROBLOX_COOKIE}\r\n"
         
-        # --- SOLUÇÃO PARA FFMPEG 7.x: Servidor HTTP Local Temporário ---
         from aiohttp import web
         app = web.Application()
         
@@ -390,20 +386,18 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         runner = web.AppRunner(app)
         await runner.setup()
         
-        # Inicia o servidor em uma porta livre aleatória (0)
         site = web.TCPSite(runner, '127.0.0.1', 0)
         await site.start()
         
-        # Obtém a porta alocada dinamicamente e monta a URL local
         port = site._server.sockets[0].getsockname()[1]
         local_url = f"http://127.0.0.1:{port}/playlist.m3u8"
         
-        # Monta o comando correto usando a flag -user_agent dedicada
+        # O User-Agent foi trocado para um Chrome genérico atualizado.
         cmd = [
             'ffmpeg', '-y',
             '-allowed_extensions', 'ALL',
             '-protocol_whitelist', 'file,http,https,tcp,tls,crypto',
-            '-user_agent', 'Roblox/WinInet',
+            '-user_agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             '-headers', custom_headers,
             '-f', 'hls',
             '-i', local_url,          
@@ -449,7 +443,6 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         logger.error(f"Erro geral processando HLS: {e}")
         return None
     finally:
-        # Garante o fechamento do servidor HTTP local para liberar a porta
         if runner:
             await runner.cleanup()
 
