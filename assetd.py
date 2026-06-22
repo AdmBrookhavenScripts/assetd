@@ -345,6 +345,7 @@ async def convert_media(input_path: str, format: str, quality: str) -> str:
 
 async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, base_url: str) -> str:
     logger.info(f"Processando playlist HLS via FFmpeg (com pré-processamento): {m3u8_path}")
+    runner = None
     try:
         # 1. Ler o arquivo m3u8 original baixado
         with open(m3u8_path, 'r', encoding='utf-8') as f:
@@ -365,31 +366,49 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         
         output_dir = os.path.dirname(m3u8_path) or '.'
         base_name = os.path.basename(m3u8_path).rsplit('.', 1)[0]
-        m3u8_filename = os.path.basename(m3u8_path) # Pegamos apenas o nome do arquivo
         webm_name = f"{base_name}.webm"
         webm_output = os.path.join(output_dir, webm_name)
         
         # Disfarçar o FFmpeg como o cliente oficial do Roblox para evitar Access Denied
         user_agent = "Roblox/WinInet"
         
+        # --- SOLUÇÃO PARA FFMPEG 7.x: Servidor HTTP Local Temporário ---
+        from aiohttp import web
+        app = web.Application()
+        
+        async def handle_playlist(request):
+            return web.Response(text=content, content_type='application/x-mpegURL')
+            
+        app.router.add_get('/playlist.m3u8', handle_playlist)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        
+        # Inicia o servidor em uma porta livre aleatória (0)
+        site = web.TCPSite(runner, '127.0.0.1', 0)
+        await site.start()
+        
+        # Obtém a porta alocada dinamicamente
+        port = site._server.sockets[0].getsockname()[1]
+        local_url = f"http://127.0.0.1:{port}/playlist.m3u8"
+        
+        # Agora usamos -user_agent apontando para uma URL HTTP local
         cmd = [
             'ffmpeg', '-y',
             '-allowed_extensions', 'ALL',
             '-protocol_whitelist', 'file,http,https,tcp,tls,crypto',
-            # Use -headers em vez de -user_agent e adicione \r\n no final
-            '-headers', f"User-Agent: {user_agent}\r\n",
+            '-user_agent', user_agent,
             '-f', 'hls',
-            '-i', m3u8_filename,          
+            '-i', local_url,          
             '-c', 'copy', 
             webm_name
         ]
         
-        logger.info(f"Iniciando FFmpeg para o fluxo HLS...")
+        logger.info(f"Iniciando FFmpeg para o fluxo HLS via servidor local...")
         process = await asyncio.create_subprocess_exec(
             *cmd, 
             stdout=asyncio.subprocess.PIPE, 
             stderr=asyncio.subprocess.PIPE,
-            cwd=os.path.abspath(output_dir) # O FFmpeg já está rodando dentro de "downloaded_assets"
+            cwd=os.path.abspath(output_dir)
         )
         
         try:
@@ -421,6 +440,10 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
     except Exception as e:
         logger.error(f"Erro geral processando HLS: {e}")
         return None
+    finally:
+        # Garante o fechamento do servidor HTTP local para liberar a porta
+        if runner:
+            await runner.cleanup()
 
 async def fetch_version_fallback(session: aiohttp.ClientSession, asset_id: str, cookie: str = None, max_versions=10):
     for version in range(1, max_versions + 1):
