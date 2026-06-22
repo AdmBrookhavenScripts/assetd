@@ -350,11 +350,9 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         with open(m3u8_path, 'r', encoding='utf-8') as f:
             content = f.read()
 
-        # 1. Encontrar a variável RBX-BASE-URI declarada pela Roblox
         match = re.search(r'#EXT-X-DEFINE:NAME="RBX-BASE-URI",VALUE="([^"]+)"', content)
         if match:
             rbx_base_uri = match.group(1)
-            # Substituir as referências literais pela URL real da CDN
             content = content.replace("{$RBX-BASE-URI}", rbx_base_uri)
         
         with open(m3u8_path, 'w', encoding='utf-8') as f:
@@ -367,8 +365,6 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         webm_name = f"{base_name}.webm"
         webm_output = os.path.join(output_dir, webm_name)
         
-        # --- O PULO DO GATO ---
-        # Removido os tokens falhos. Adicionado o Cookie oficial e o User-Agent do client.
         custom_headers = "Accept: */*\r\n"
         if ROBLOX_COOKIE:
             custom_headers += f"Cookie: .ROBLOSECURITY={ROBLOX_COOKIE}\r\n"
@@ -393,7 +389,7 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
             'ffmpeg', '-y',
             '-allowed_extensions', 'ALL',
             '-protocol_whitelist', 'file,http,https,tcp,tls,crypto',
-            '-user_agent', 'Roblox/WinInet',  # Simula perfeitamente o client do Roblox
+            '-user_agent', 'Roblox/WinInet',
             '-headers', custom_headers,
             '-f', 'hls',
             '-i', local_url,          
@@ -496,7 +492,7 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
 
     if asset_type_id:
         logger.info(f"Asset {asset_id} - Tentando obter URL de forma publica...")
-        asset_url = await fetch_asset_location(session, asset_id)
+        asset_url = await fetch_asset_location(session, asset_id, cookie=ROBLOX_COOKIE)
         
         if asset_url:
             logger.info(f"Asset {asset_id} - URL publica obtida com sucesso!")
@@ -527,23 +523,14 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
         asset_url = await fetch_version_fallback(session, asset_id, ROBLOX_COOKIE)
 
         if not asset_url and FALLBACK_GAMES:
-            logger.info(
-            f"Asset {asset_id} - Tentando {len(FALLBACK_GAMES)} jogos de fallback-games.txt..."
-            )
+            logger.info(f"Asset {asset_id} - Tentando {len(FALLBACK_GAMES)} jogos de fallback-games.txt...")
 
         for place_id in FALLBACK_GAMES:
-            test_url = await fetch_asset_location(
-                session,
-                asset_id,
-                place_id,
-                ROBLOX_COOKIE
-            )
+            test_url = await fetch_asset_location(session, asset_id, place_id, ROBLOX_COOKIE)
 
             if test_url:
                 asset_url = test_url
-                logger.info(
-                    f"Asset {asset_id} - URL obtida via fallback-games.txt (PlaceID: {place_id})"
-                )
+                logger.info(f"Asset {asset_id} - URL obtida via fallback-games.txt (PlaceID: {place_id})")
                 break
 
     if not asset_url:
@@ -553,7 +540,15 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
 
     try:
         logger.info(f"Asset URL: {asset_url}")
-        async with session.get(asset_url) as response:
+        
+        dl_headers = {
+            "User-Agent": "Roblox/WinInet",
+            "Accept": "*/*"
+        }
+        if ROBLOX_COOKIE:
+            dl_headers["Cookie"] = f".ROBLOSECURITY={ROBLOX_COOKIE}"
+
+        async with session.get(asset_url, headers=dl_headers) as response:
             if response.status != 200:
                 msg = f"Asset {asset_id} - Falha no download HTTP {response.status}."
                 logger.error(msg)
