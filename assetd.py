@@ -362,10 +362,14 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         
         output_dir = os.path.dirname(m3u8_path) or '.'
         base_name = os.path.basename(m3u8_path).rsplit('.', 1)[0]
-        webm_name = f"{base_name}.webm"
-        webm_output = os.path.join(output_dir, webm_name)
+        mp4_name = f"{base_name}.mp4"
+        mp4_output = os.path.join(output_dir, mp4_name)
         
-        custom_headers = "Accept: */*\r\n"
+        custom_headers = (
+            "Accept: */*\r\n"
+            "Origin: https://www.roblox.com\r\n"
+            "Referer: https://www.roblox.com/\r\n"
+        )
         if ROBLOX_COOKIE:
             custom_headers += f"Cookie: .ROBLOSECURITY={ROBLOX_COOKIE}\r\n"
         
@@ -385,16 +389,19 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         port = site._server.sockets[0].getsockname()[1]
         local_url = f"http://127.0.0.1:{port}/playlist.m3u8"
         
+        user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        
         cmd = [
             'ffmpeg', '-y',
             '-allowed_extensions', 'ALL',
             '-protocol_whitelist', 'file,http,https,tcp,tls,crypto',
-            '-user_agent', 'Roblox/WinInet',
+            '-user_agent', user_agent,
             '-headers', custom_headers,
             '-f', 'hls',
             '-i', local_url,          
             '-c', 'copy', 
-            webm_name
+            '-bsf:a', 'aac_adtstoasc',
+            mp4_name
         ]
         
         logger.info(f"Iniciando FFmpeg para o fluxo HLS via servidor local...")
@@ -421,7 +428,7 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
                 logger.error(f"Erro FFmpeg: {stderr.decode(errors='ignore')}")
             return None
 
-        logger.info(f"Vídeo HLS reconstruído com sucesso pelo FFmpeg: {webm_output}")
+        logger.info(f"Vídeo HLS reconstruído com sucesso pelo FFmpeg: {mp4_output}")
 
         try:
             if os.path.exists(m3u8_path):
@@ -429,7 +436,7 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         except Exception as e:
             logger.warning(f"Erro ao limpar arquivo m3u8 temporário: {e}")
 
-        return webm_output
+        return mp4_output
 
     except Exception as e:
         logger.error(f"Erro geral processando HLS: {e}")
@@ -542,8 +549,10 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
         logger.info(f"Asset URL: {asset_url}")
         
         dl_headers = {
-            "User-Agent": "Roblox/WinInet",
-            "Accept": "*/*"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Accept": "*/*",
+            "Origin": "https://www.roblox.com",
+            "Referer": "https://www.roblox.com/"
         }
         if ROBLOX_COOKIE:
             dl_headers["Cookie"] = f".ROBLOSECURITY={ROBLOX_COOKIE}"
@@ -657,7 +666,7 @@ class MediaFormatView(discord.ui.View):
     def __init__(self, has_audio: bool, has_video: bool):
         super().__init__(timeout=120)
         self.audio_fmt = '.ogg'
-        self.video_fmt = '.webm'
+        self.video_fmt = '.mp4'
         self.audio_quality = 'original'
         self.video_quality = 'original'
         self.confirmed = False
@@ -670,9 +679,9 @@ class MediaFormatView(discord.ui.View):
             row_idx += 1
             
         if has_video:
-            self.add_item(FormatButton("MP4", ".mp4", row=row_idx, is_audio=False))
+            self.add_item(FormatButton("MP4 (Original)", ".mp4", row=row_idx, is_audio=False, style=discord.ButtonStyle.primary))
             self.add_item(FormatButton("MOV", ".mov", row=row_idx, is_audio=False))
-            self.add_item(FormatButton("WEBM (Original)", ".webm", row=row_idx, is_audio=False, style=discord.ButtonStyle.primary))
+            self.add_item(FormatButton("WEBM", ".webm", row=row_idx, is_audio=False))
             row_idx += 1
 
         if has_audio:
@@ -735,7 +744,7 @@ async def asset(interaction: discord.Interaction, asset_id: str):
         
     if file_path and os.path.exists(file_path):
         has_a = file_path.endswith('.ogg')
-        has_v = file_path.endswith('.webm')
+        has_v = file_path.endswith('.webm') or file_path.endswith('.mp4')
         
         if has_a or has_v:
             view = MediaFormatView(has_a, has_v)
@@ -851,7 +860,7 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
         return
 
     has_a = any(f.endswith('.ogg') for f in downloaded_files)
-    has_v = any(f.endswith('.webm') for f in downloaded_files)
+    has_v = any(f.endswith('.webm') or f.endswith('.mp4') for f in downloaded_files)
 
     try:
         if has_a or has_v:
@@ -864,7 +873,7 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
                 for f in downloaded_files:
                     if f.endswith('.ogg'):
                         f = await convert_media(f, view.audio_fmt, view.audio_quality)
-                    elif f.endswith('.webm'):
+                    elif f.endswith('.webm') or f.endswith('.mp4'):
                         f = await convert_media(f, view.video_fmt, view.video_quality)
                     new_files.append(f)
                 downloaded_files = new_files
