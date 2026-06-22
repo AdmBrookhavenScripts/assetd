@@ -8,7 +8,7 @@ import zipfile
 import uuid
 import logging
 import time
-from urllib.parse import urljoin, urlparse, urlunparse
+from urllib.parse import urljoin, urlparse, urlunparse, parse_qsl, urlencode
 from colorama import init, Fore, Style
 
 init(autoreset=True)
@@ -402,12 +402,9 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
             joined = urljoin(base_path, target_path)
             parsed_joined = urlparse(joined)
             parsed_master = urlparse(master_url)
-            
-            if not urlparse(target_path).query:
-                if parsed_joined.netloc == parsed_master.netloc:
-                    joined = urlunparse(parsed_joined._replace(query=parsed_master.query))
-                
-            return joined
+            merged_params = dict(parse_qsl(parsed_joined.query))
+            merged_params.update(dict(parse_qsl(parsed_master.query)))
+            return urlunparse(parsed_joined._replace(query=urlencode(merged_params)))
 
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
@@ -421,6 +418,11 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
                 best_playlist_url = best_playlist_url.replace(
                     "{$RBX-BASE-URI}",
                     rbx_base_uri.rstrip("/")
+                )
+                best_playlist_url = get_url_with_auth(
+                    base_url,
+                    best_playlist_url,
+                    base_url
                 )
             else:
                 best_playlist_url = get_url_with_auth(
