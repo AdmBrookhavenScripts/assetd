@@ -372,14 +372,14 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         # Disfarçar o FFmpeg como o cliente oficial do Roblox para evitar Access Denied
         user_agent = "Roblox/WinInet"
         
-        # Agora o FFmpeg lê o arquivo local modificado. 
         cmd = [
             'ffmpeg', '-y',
-            '-user_agent', user_agent,
             '-allowed_extensions', 'ALL',
             '-protocol_whitelist', 'file,http,https,tcp,tls,crypto',
+            # Use -headers em vez de -user_agent e adicione \r\n no final
+            '-headers', f"User-Agent: {user_agent}\r\n",
             '-f', 'hls',
-            '-i', m3u8_filename,  # <- CORREÇÃO: Passando apenas o nome do arquivo, já que o cwd cuida da pasta          
+            '-i', m3u8_filename,          
             '-c', 'copy', 
             webm_name
         ]
