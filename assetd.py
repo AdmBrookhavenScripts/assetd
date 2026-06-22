@@ -344,106 +344,146 @@ async def convert_media(input_path: str, format: str, quality: str) -> str:
     return input_path
 
 async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, base_url: str) -> str:
-    logger.info(f"Processando playlist HLS via FFmpeg (com pré-processamento): {m3u8_path}")
-    runner = None
+    logger.info(f"Processando playlist HLS via download de segmentos: {m3u8_path}")
     try:
         with open(m3u8_path, 'r', encoding='utf-8') as f:
             content = f.read()
 
+        # 1. Encontrar a variável RBX-BASE-URI declarada pela Roblox
         match = re.search(r'#EXT-X-DEFINE:NAME="RBX-BASE-URI",VALUE="([^"]+)"', content)
         if match:
             rbx_base_uri = match.group(1)
             content = content.replace("{$RBX-BASE-URI}", rbx_base_uri)
+
+        # 2. Extrair todas as sub-playlists (.m3u8) internas
+        urls_internas = re.findall(r'(https?://[^\s$.?#].[^\s]*)', content)
         
-        with open(m3u8_path, 'w', encoding='utf-8') as f:
-            f.write(content)
-            
-        logger.info("Variável {$RBX-BASE-URI} substituída com sucesso no arquivo local.")
+        if not urls_internas:
+            logger.error("Nenhuma URL de sub-playlist encontrada no arquivo master.")
+            return None
+
+        # Vamos pegar a primeira variante disponível (geralmente a de maior qualidade ou padrão)
+        sub_playlist_url = urls_internas[0]
         
+        # Copiar os parâmetros de autenticação (tokens, assinaturas) da URL original do Asset para a sub-playlist
+        parsed_base = urlparse(base_url)
+        query_params = parsed_base.query
+        
+        if "?" in sub_playlist_url:
+            sub_playlist_url += f"&{query_params}"
+        else:
+            sub_playlist_url += f"?{query_params}"
+
+        # 3. Baixar o conteúdo da sub-playlist real que contém os fragmentos (.ts ou .m4s)
+        headers = {"User-Agent": "Roblox/WinInet"}
+        if ROBLOX_COOKIE:
+            headers["Cookie"] = f".ROBLOSECURITY={ROBLOX_COOKIE}"
+
+        async with session.get(sub_playlist_url, headers=headers) as resp:
+            if resp.status != 200:
+                logger.error(f"Erro ao baixar sub-playlist: HTTP {resp.status}")
+                return None
+            sub_content = await resp.text()
+
+        # 4. Extrair as URLs dos segmentos de vídeo reais
+        # A Roblox costuma usar caminhos relativos ou completos baseados em {$RBX-BASE-URI}
+        # Vamos substituir a variável na sub-playlist também se existir
+        if match:
+            sub_content = sub_content.replace("{$RBX-BASE-URI}", rbx_base_uri)
+
+        segmentos = []
+        for line in sub_content.splitlines():
+            line = line.strip()
+            if line and not line.startswith("#"):
+                # Se for link relativo, transforma em absoluto usando o rbx_base_uri
+                if not line.startswith("http"):
+                    segment_url = urljoin(rbx_base_uri + "/", line)
+                else:
+                    segment_url = line
+                
+                # Injeta os tokens de autenticação em cada segmento individualmente
+                if "?" in segment_url:
+                    segment_url += f"&{query_params}"
+                else:
+                    segment_url += f"?{query_params}"
+                segmentos.append(segment_url)
+
+        if not segmentos:
+            logger.error("Nenhum segmento de vídeo encontrado para download.")
+            return None
+
         output_dir = os.path.dirname(m3u8_path) or '.'
         base_name = os.path.basename(m3u8_path).rsplit('.', 1)[0]
-        mp4_name = f"{base_name}.mp4"
-        mp4_output = os.path.join(output_dir, mp4_name)
         
-        custom_headers = (
-            "Accept: */*\r\n"
-            "Origin: https://www.roblox.com\r\n"
-            "Referer: https://www.roblox.com/\r\n"
-        )
-        if ROBLOX_COOKIE:
-            custom_headers += f"Cookie: .ROBLOSECURITY={ROBLOX_COOKIE}\r\n"
-        
-        from aiohttp import web
-        app = web.Application()
-        
-        async def handle_playlist(request):
-            return web.Response(text=content, content_type='application/x-mpegURL')
-            
-        app.router.add_get('/playlist.m3u8', handle_playlist)
-        runner = web.AppRunner(app)
-        await runner.setup()
-        
-        site = web.TCPSite(runner, '127.0.0.1', 0)
-        await site.start()
-        
-        port = site._server.sockets[0].getsockname()[1]
-        local_url = f"http://127.0.0.1:{port}/playlist.m3u8"
-        
-        user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        # Criar um arquivo txt temporário para listar os arquivos para o FFmpeg
+        concat_list_path = os.path.join(output_dir, f"list_{base_name}.txt")
+        downloaded_segments = []
+
+        # 5. Baixar cada segmento de vídeo sequencialmente para o disco
+        logger.info(f"Baixando {len(segmentos)} segmentos de vídeo...")
+        for idx, seg_url in enumerate(segmentos):
+            async with session.get(seg_url, headers=headers) as seg_resp:
+                if seg_resp.status == 200:
+                    seg_data = await seg_resp.read()
+                    seg_filename = os.path.join(output_dir, f"part_{idx}_{base_name}.ts")
+                    with open(seg_filename, "wb") as f_seg:
+                        f_seg.write(seg_data)
+                    downloaded_segments.append(seg_filename)
+                else:
+                    logger.warning(f"Falha ao baixar segmento {idx}: HTTP {seg_resp.status}")
+
+        if not downloaded_segments:
+            logger.error("Falha ao baixar todos os segmentos.")
+            return None
+
+        # Escrever a lista de arquivos no formato que o FFmpeg entende para concatenação
+        with open(concat_list_path, "w", encoding="utf-8") as f_list:
+            for seg in downloaded_segments:
+                # O FFmpeg exige caminhos absolutos ou relativos normais, usamos apenas o nome do arquivo se estiver na mesma pasta
+                f_list.write(f"file '{os.path.basename(seg)}'\n")
+
+        # 6. Usar o FFmpeg localmente via Demuxer de Concatenação (operação extremamente rápida e sem erros de rede)
+        webm_name = f"{base_name}.webm"
+        webm_output = os.path.join(output_dir, webm_name)
         
         cmd = [
             'ffmpeg', '-y',
-            '-allowed_extensions', 'ALL',
-            '-protocol_whitelist', 'file,http,https,tcp,tls,crypto',
-            '-user_agent', user_agent,
-            '-headers', custom_headers,
-            '-f', 'hls',
-            '-i', local_url,          
-            '-c', 'copy', 
-            '-bsf:a', 'aac_adtstoasc',
-            mp4_name
+            '-f', 'concat',
+            '-safe', '0',
+            '-i', os.path.basename(concat_list_path),
+            '-c', 'copy',
+            webm_name
         ]
-        
-        logger.info(f"Iniciando FFmpeg para o fluxo HLS via servidor local...")
+
+        logger.info("Concatenando segmentos localmente com FFmpeg...")
         process = await asyncio.create_subprocess_exec(
-            *cmd, 
-            stdout=asyncio.subprocess.PIPE, 
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=os.path.abspath(output_dir)
         )
-        
-        try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=600)
-        except asyncio.TimeoutError:
-            try:
-                process.kill()
-            except Exception:
-                pass
-            logger.error("FFmpeg processamento HLS estourou o tempo limite.")
-            return None
-        
+
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=120)
+
+        # Limpar arquivos temporários do disco
+        for seg in downloaded_segments:
+            try: os.remove(seg)
+            except Exception: pass
+        try: os.remove(concat_list_path)
+        except Exception: pass
+        try: os.remove(m3u8_path)
+        except Exception: pass
+
         if process.returncode != 0:
-            logger.error(f"Falha no FFmpeg HLS. Código: {process.returncode}")
-            if stderr:
-                logger.error(f"Erro FFmpeg: {stderr.decode(errors='ignore')}")
+            logger.error(f"Falha na concatenação do FFmpeg. Código: {process.returncode}")
             return None
 
-        logger.info(f"Vídeo HLS reconstruído com sucesso pelo FFmpeg: {mp4_output}")
-
-        try:
-            if os.path.exists(m3u8_path):
-                os.remove(m3u8_path)
-        except Exception as e:
-            logger.warning(f"Erro ao limpar arquivo m3u8 temporário: {e}")
-
-        return mp4_output
+        logger.info(f"Vídeo HLS reconstruído com sucesso localmente: {webm_output}")
+        return webm_output
 
     except Exception as e:
         logger.error(f"Erro geral processando HLS: {e}")
         return None
-    finally:
-        if runner:
-            await runner.cleanup()
 
 async def fetch_version_fallback(session: aiohttp.ClientSession, asset_id: str, cookie: str = None, max_versions=10):
     for version in range(1, max_versions + 1):
