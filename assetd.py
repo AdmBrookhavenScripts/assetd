@@ -344,22 +344,42 @@ async def convert_media(input_path: str, format: str, quality: str) -> str:
     return input_path
 
 async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, base_url: str) -> str:
-    logger.info(f"Processando playlist HLS diretamente via FFmpeg: {m3u8_path}")
+    logger.info(f"Processando playlist HLS via FFmpeg (com pré-processamento): {m3u8_path}")
     try:
+        # 1. Ler o arquivo m3u8 original baixado
+        with open(m3u8_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        # 2. Encontrar a variável RBX-BASE-URI declarada pela Roblox
+        match = re.search(r'#EXT-X-DEFINE:NAME="RBX-BASE-URI",VALUE="([^"]+)"', content)
+        if match:
+            rbx_base_uri = match.group(1)
+            
+            # 3. Substituir as referências literais pela URL real (S3)
+            content = content.replace("{$RBX-BASE-URI}", rbx_base_uri)
+            
+            # Reescrever o arquivo local com as URLs absolutas já corrigidas
+            with open(m3u8_path, 'w', encoding='utf-8') as f:
+                f.write(content)
+            logger.info("Variável {$RBX-BASE-URI} substituída com sucesso no arquivo local.")
+        
         output_dir = os.path.dirname(m3u8_path) or '.'
         base_name = os.path.basename(m3u8_path).rsplit('.', 1)[0]
         webm_name = f"{base_name}.webm"
         webm_output = os.path.join(output_dir, webm_name)
         
-        # Passamos um user-agent válido para o ffmpeg evitar bloqueios na CDN da Roblox
-        user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        # Disfarçar o FFmpeg como o cliente oficial do Roblox para evitar Access Denied
+        user_agent = "Roblox/WinInet"
         
-        # Forçamos o formato HLS (-f hls) antes do input, pois a URL da Roblox não tem extensão .m3u8 no final
+        # Agora o FFmpeg lê o arquivo local modificado. 
+        # Liberamos o whitelist de protocolos para ele poder baixar os links HTTP/HTTPS contidos no arquivo local.
         cmd = [
             'ffmpeg', '-y',
             '-user_agent', user_agent,
+            '-allowed_extensions', 'ALL',
+            '-protocol_whitelist', 'file,http,https,tcp,tls,crypto',
             '-f', 'hls',
-            '-i', base_url,            
+            '-i', m3u8_path,            
             '-c', 'copy', 
             webm_name
         ]
