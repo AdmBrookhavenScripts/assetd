@@ -350,7 +350,8 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
             m3u8_content = f.read()
 
         lines = m3u8_content.splitlines()
-        
+        logger.info(f"Tipo de playlist detectada. Primeiras linhas: {lines[:5]}")
+
         rbx_base_uri = None
         for line in lines:
             match = re.search(r'#EXT-X-DEFINE:NAME="RBX-BASE-URI",VALUE="([^"]+)"', line)
@@ -358,6 +359,7 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
                 rbx_base_uri = match.group(1)
                 if not rbx_base_uri.endswith('/'):
                     rbx_base_uri += '/'
+                logger.info(f"RBX-BASE-URI detectado: {rbx_base_uri}")
                 break
 
         best_playlist_url = None
@@ -367,6 +369,8 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
             if line.startswith('#EXT-X-STREAM-INF'):
                 if i + 1 < len(lines):
                     streams.append((line, lines[i+1]))
+        
+        logger.info(f"Quantidade de streams encontrados: {len(streams)}")
         
         if streams:
             best_stream = None
@@ -382,17 +386,26 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
 
             if best_stream:
                 best_playlist_url = best_stream[1]
+                logger.info(f"Stream selecionado (Maior Resolução): {best_stream[0]}")
             else:
                 best_playlist_url = streams[0][1]
+                for info, url in streams:
+                    if '720' in info or '720' in url:
+                        best_playlist_url = url
+                        best_stream = (info, url)
+                        break
+                if not best_stream:
+                    best_stream = streams[0]
+                logger.info(f"Stream selecionado (Fallback): {best_stream[0]}")
 
         def get_url_with_auth(base_path, target_path, master_url):
             joined = urljoin(base_path, target_path)
             parsed_joined = urlparse(joined)
             parsed_master = urlparse(master_url)
             
-            # CORREÇÃO: Forçar a adição da query (tokens) independentemente do netloc bater
             if not urlparse(target_path).query:
-                joined = urlunparse(parsed_joined._replace(query=parsed_master.query))
+                if parsed_joined.netloc == parsed_master.netloc:
+                    joined = urlunparse(parsed_joined._replace(query=parsed_master.query))
                 
             return joined
 
@@ -409,17 +422,14 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
                     "{$RBX-BASE-URI}",
                     rbx_base_uri.rstrip("/")
                 )
-                # CORREÇÃO: Recuperar os tokens ao usar o RBX-BASE-URI
-                parsed_best = urlparse(best_playlist_url)
-                parsed_base = urlparse(base_url)
-                if not parsed_best.query:
-                    best_playlist_url = urlunparse(parsed_best._replace(query=parsed_base.query))
             else:
                 best_playlist_url = get_url_with_auth(
                     base_url,
                     best_playlist_url,
                     base_url
                 )
+
+            logger.info(f"URL INTERNA = {best_playlist_url}")
 
             async with session.get(best_playlist_url, headers=headers) as resp:
                 if resp.status != 200:
@@ -437,6 +447,9 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         base_name = os.path.basename(m3u8_path).rsplit('.', 1)[0]
         
         segment_files = []
+        logger.info(f"Quantidade de segmentos encontrados: {len(segments)}")
+        logger.info(f"Baixando {len(segments)} segmentos HLS para {base_name}...")
+        
         segments_base_path = best_playlist_url
 
         for i, seg in enumerate(segments):
@@ -444,7 +457,10 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
             
             clean_url = seg_url.split('?')[0]
             filename = clean_url.split('/')[-1]
-            ext = '.' + filename.split('.')[-1] if '.' in filename else '.webm'
+            if '.' in filename:
+                ext = '.' + filename.split('.')[-1]
+            else:
+                ext = '.webm'
             
             seg_path = os.path.join(output_dir, f"{base_name}_seg_{i:04d}{ext}")
             
@@ -454,6 +470,7 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
                     with open(seg_path, 'wb') as f:
                         f.write(content)
                     segment_files.append(seg_path)
+                    logger.info(f"Segmento {i:04d} baixado | Extensão: {ext} | Tamanho: {len(content)} bytes")
                 else:
                     logger.error(f"Falha ao baixar segmento HLS {clean_url} (HTTP {resp.status})")
 
@@ -468,6 +485,7 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
 
         webm_name = f"{base_name}.webm"
         webm_output = os.path.join(output_dir, webm_name)
+        logger.info(f"Concatenando segmentos em {webm_name}...")
         
         cmd = ['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', list_name, '-c', 'copy', webm_name]
         
@@ -479,24 +497,29 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         )
         
         try:
-            await asyncio.wait_for(process.communicate(), timeout=600)
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=600)
         except asyncio.TimeoutError:
             try:
                 process.kill()
             except Exception:
                 pass
+            logger.error("FFmpeg concatenação timeout.")
             return None
         
         if process.returncode != 0:
+            logger.error("Falha na reconstrução HLS.")
+            logger.error(f"Motivo: FFmpeg falhou com código de retorno {process.returncode}")
             return None
+
+        logger.info(f"Resultado final da concatenação HLS: Sucesso. Salvo em {webm_output}")
 
         try:
             os.remove(m3u8_path)
             os.remove(list_path)
             for sf in segment_files:
                 os.remove(sf)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Erro ao limpar arquivos temporários HLS: {e}")
 
         return webm_output
 
