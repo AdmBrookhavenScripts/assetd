@@ -1,4 +1,3 @@
-
 import discord
 from discord import app_commands
 import aiohttp
@@ -64,7 +63,7 @@ NO_BINARY_TYPES = [21, 34]
 
 async def upload_gofile(file_path: str):
     try:
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=300)) as session:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=1800)) as session:
             servers = []
             try:
                 async with session.get("https://api.gofile.io/servers") as resp:
@@ -313,7 +312,7 @@ async def convert_media(input_path: str, format: str, quality: str) -> str:
         )
 
         try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=300)
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=900)
         except asyncio.TimeoutError:
             try:
                 process.kill()
@@ -501,7 +500,7 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         )
         
         try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=600)
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=900)
         except asyncio.TimeoutError:
             try:
                 process.kill()
@@ -621,7 +620,7 @@ async def download_public_video(session: aiohttp.ClientSession, asset_id: str, c
     )
     
     try:
-        await asyncio.wait_for(process.communicate(), timeout=600)
+        await asyncio.wait_for(process.communicate(), timeout=900)
     except asyncio.TimeoutError:
         try:
             process.kill()
@@ -893,10 +892,11 @@ async def asset(interaction: discord.Interaction, asset_id: str):
                     break
                 i += 1
                 desc = f"**🕣 Processando... {state['current']}/{state['total']} Assets\n`{'🟩' * i}{'⬜' * (10 - i)}`\n\nTempo estimado: {10 - i}s**"
-                try:
-                    await interaction.edit_original_response(content=None, embed=discord.Embed(description=desc, color=0x335fff))
-                except Exception:
-                    pass
+                if state["running"]:
+                    try:
+                        await interaction.edit_original_response(content=None, embed=discord.Embed(description=desc, color=0x335fff), view=None)
+                    except Exception:
+                        pass
         except asyncio.CancelledError:
             pass
 
@@ -915,8 +915,6 @@ async def asset(interaction: discord.Interaction, asset_id: str):
     except asyncio.CancelledError:
         pass
 
-    await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"**🕣 Processando... {state['total']}/{state['total']} Assets\n`🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩`\n\nTempo estimado: 0s**", color=0x335fff))
-        
     if file_path and os.path.exists(file_path):
         has_a = file_path.endswith('.ogg')
         has_v = file_path.endswith('.webm')
@@ -931,19 +929,32 @@ async def asset(interaction: discord.Interaction, asset_id: str):
                 qual = view.audio_quality if has_a else view.video_quality
                 file_path = await convert_media(file_path, fmt, qual)
             
-            if os.path.getsize(file_path) > 10 * 1024 * 1024:
-                await interaction.edit_original_response(content=None, embed=discord.Embed(description="O arquivo convertido excede o limite de 10MB do Discord. Enviando para o Gofile...", color=0x335fff), view=None)
-                gofile_url = await upload_gofile(file_path)
+        if os.path.getsize(file_path) > 10 * 1024 * 1024:
+            try:
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description="O arquivo convertido excede 10MB. Enviando para o Gofile (isso pode demorar)...", color=0x335fff), view=None)
+            except discord.errors.HTTPException:
+                try:
+                    await interaction.channel.send(embed=discord.Embed(description="O arquivo convertido excede 10MB. Enviando para o Gofile (isso pode demorar)...", color=0x335fff))
+                except Exception:
+                    pass
+
+            gofile_url = await upload_gofile(file_path)
+
+            try:
                 await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"O arquivo excedeu o limite de 10MB do Discord. Link do Gofile: {gofile_url}", color=0x335fff), view=None)
-            else:
-                await interaction.edit_original_response(content=None, embed=discord.Embed(description="**☑️ Concluído!**", color=0x335fff), attachments=[discord.File(file_path)], view=None)
+            except discord.errors.HTTPException:
+                try:
+                    await interaction.channel.send(embed=discord.Embed(description=f"O arquivo excedeu o limite de 10MB do Discord. Link do Gofile: {gofile_url}", color=0x335fff))
+                except Exception:
+                    pass
         else:
-            if os.path.getsize(file_path) > 10 * 1024 * 1024:
-                await interaction.edit_original_response(content=None, embed=discord.Embed(description="O arquivo excede o limite de 10MB do Discord. Enviando para o Gofile...", color=0x335fff))
-                gofile_url = await upload_gofile(file_path)
-                await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"O arquivo excedeu o limite de 10MB do Discord. Link do Gofile: {gofile_url}", color=0x335fff))
-            else:
-                await interaction.edit_original_response(content=None, embed=discord.Embed(description="**☑️ Concluído!**", color=0x335fff), attachments=[discord.File(file_path)])
+            try:
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description="**☑️ Concluído!**", color=0x335fff), attachments=[discord.File(file_path)], view=None)
+            except discord.errors.HTTPException:
+                try:
+                    await interaction.channel.send(embed=discord.Embed(description="**☑️ Concluído!**", color=0x335fff), file=discord.File(file_path))
+                except Exception:
+                    pass
                 
         try:
             if os.path.exists(file_path):
@@ -951,7 +962,13 @@ async def asset(interaction: discord.Interaction, asset_id: str):
         except Exception:
             pass
     else:
-        await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"**❌️ Erro: {error}**", color=0x335fff))
+        try:
+            await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"**❌️ Erro: {error}**", color=0x335fff), view=None)
+        except discord.errors.HTTPException:
+            try:
+                await interaction.channel.send(embed=discord.Embed(description=f"**❌️ Erro: {error}**", color=0x335fff))
+            except Exception:
+                pass
 
 @client.tree.command(name="assetbatch", description="Baixa multiplos assets e retorna um arquivo ZIP limpo")
 async def assetbatch(interaction: discord.Interaction, asset_ids: str):
@@ -978,10 +995,11 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
                 i += 1
                 est = max(1, int((10 - i) * 1.5))
                 desc = f"**🕣 Processando... {state['current']}/{state['total']} Assets\n`{'🟩' * i}{'⬜️' * (10 - i)}`\n\nTempo estimado: {est}s**"
-                try:
-                    await interaction.edit_original_response(content=None, embed=discord.Embed(description=desc, color=0x335fff))
-                except Exception:
-                    pass
+                if state["running"]:
+                    try:
+                        await interaction.edit_original_response(content=None, embed=discord.Embed(description=desc, color=0x335fff), view=None)
+                    except Exception:
+                        pass
         except asyncio.CancelledError:
             pass
 
@@ -1020,18 +1038,16 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
         await ptask
     except asyncio.CancelledError:
         pass
-    
-    try:
-        await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"**🕣 Processando... {state['total']}/{state['total']} Assets\n`🟩🟩🟩🟩🟩🟩🟩🟩🟩🟩`\n\nTempo estimado: 0s**", color=0x335fff))
-    except Exception:
-        pass
 
     if not downloaded_files:
         err_msg = "\n".join(errors)[:1800]
         try:
-            await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"Falha total no lote. Nenhum arquivo foi salvo.\nErros:\n{err_msg}", color=0x335fff))
+            await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"Falha total no lote. Nenhum arquivo foi salvo.\nErros:\n{err_msg}", color=0x335fff), view=None)
         except Exception:
-            await interaction.channel.send(embed=discord.Embed(description=f"Falha total no lote. Nenhum arquivo foi salvo.\nErros:\n{err_msg}", color=0x335fff))
+            try:
+                await interaction.channel.send(embed=discord.Embed(description=f"Falha total no lote. Nenhum arquivo foi salvo.\nErros:\n{err_msg}", color=0x335fff))
+            except Exception:
+                pass
         return
 
     has_a = any(f.endswith('.ogg') for f in downloaded_files)
@@ -1056,7 +1072,7 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
             else:
                 await interaction.edit_original_response(content=None, embed=discord.Embed(description="Tempo esgotado. Mantendo os arquivos originais e criando ZIP...", color=0x335fff), view=None)
         else:
-            await interaction.edit_original_response(content=None, embed=discord.Embed(description="Criando ZIP...", color=0x335fff))
+            await interaction.edit_original_response(content=None, embed=discord.Embed(description="Criando ZIP...", color=0x335fff), view=None)
     except discord.errors.HTTPException:
         pass
 
@@ -1072,9 +1088,12 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
         await asyncio.to_thread(create_zip)
     except Exception as e:
         try:
-            await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"**❌ Erro interno ao criar o ZIP:** {e}", color=0x335fff))
+            await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"**❌ Erro interno ao criar o ZIP:** {e}", color=0x335fff), view=None)
         except Exception:
-            await interaction.channel.send(embed=discord.Embed(description=f"**❌ Erro interno ao criar o ZIP:** {e}", color=0x335fff))
+            try:
+                await interaction.channel.send(embed=discord.Embed(description=f"**❌ Erro interno ao criar o ZIP:** {e}", color=0x335fff))
+            except Exception:
+                pass
         for file in downloaded_files:
             try:
                 if os.path.exists(file):
@@ -1082,6 +1101,11 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
             except Exception:
                 pass
         return
+
+    try:
+        await interaction.edit_original_response(content=None, embed=discord.Embed(description="**☑️ Lote processado! Preparando envio...**", color=0x335fff), view=None)
+    except Exception:
+        pass
 
     final_msg = f"**☑️ Lote concluido: {len(downloaded_files)} arquivos processados.**"
     if failed_ids:
@@ -1092,25 +1116,41 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
         else:
             final_msg += ", ".join(f"{i}" for i in failed_ids)
 
-    try:
-        if os.path.exists(zip_filename):
-            if os.path.getsize(zip_filename) > 10 * 1024 * 1024:
-                await interaction.edit_original_response(content=None, embed=discord.Embed(description="O arquivo ZIP final excede o limite de 10MB do Discord. Enviando para o Gofile...", color=0x335fff))
-                gofile_url = await upload_gofile(zip_filename)
-                await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"{final_msg}\n\nO arquivo ZIP excedeu o limite de 10MB do Discord. Link do Gofile: {gofile_url}", color=0x335fff))
-            else:
+    if os.path.exists(zip_filename):
+        if os.path.getsize(zip_filename) > 10 * 1024 * 1024:
+            try:
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"{final_msg}\n\nO arquivo ZIP excede 10MB. Enviando para o Gofile (isso pode demorar)...", color=0x335fff), view=None)
+            except discord.errors.HTTPException:
+                try:
+                    await interaction.channel.send(embed=discord.Embed(description=f"{final_msg}\n\nO arquivo ZIP excede 10MB. Enviando para o Gofile (isso pode demorar)...", color=0x335fff))
+                except Exception:
+                    pass
+
+            gofile_url = await upload_gofile(zip_filename)
+
+            try:
+                await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"{final_msg}\n\nO arquivo ZIP excedeu o limite de 10MB do Discord. Link do Gofile: {gofile_url}", color=0x335fff), view=None)
+            except discord.errors.HTTPException:
+                try:
+                    await interaction.channel.send(content=None, embed=discord.Embed(description=f"{final_msg}\n\nO arquivo ZIP excedeu o limite de 10MB do Discord. Link do Gofile: {gofile_url}", color=0x335fff))
+                except Exception:
+                    pass
+        else:
+            try:
                 await interaction.edit_original_response(content=None, embed=discord.Embed(description=final_msg, color=0x335fff), attachments=[discord.File(zip_filename)])
-        else:
-            await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"{final_msg}\n\n**❌ Erro:** O arquivo ZIP falhou ao ser salvo no disco.", color=0x335fff))
-    except discord.errors.HTTPException:
-        if os.path.exists(zip_filename):
-            if os.path.getsize(zip_filename) > 10 * 1024 * 1024:
-                gofile_url = await upload_gofile(zip_filename)
-                await interaction.channel.send(content=None, embed=discord.Embed(description=f"{final_msg}\n\nO arquivo ZIP excedeu o limite de 10MB do Discord. Link do Gofile: {gofile_url}", color=0x335fff))
-            else:
-                await interaction.channel.send(content=None, embed=discord.Embed(description=final_msg, color=0x335fff), file=discord.File(zip_filename))
-        else:
-            await interaction.channel.send(embed=discord.Embed(description=f"{final_msg}\n\n**❌ Erro: O arquivo ZIP falhou ao ser salvo no disco.**", color=0x335fff))
+            except discord.errors.HTTPException:
+                try:
+                    await interaction.channel.send(content=None, embed=discord.Embed(description=final_msg, color=0x335fff), file=discord.File(zip_filename))
+                except Exception:
+                    pass
+    else:
+        try:
+            await interaction.edit_original_response(content=None, embed=discord.Embed(description=f"{final_msg}\n\n**❌ Erro:** O arquivo ZIP falhou ao ser salvo no disco.", color=0x335fff), view=None)
+        except discord.errors.HTTPException:
+            try:
+                await interaction.channel.send(embed=discord.Embed(description=f"{final_msg}\n\n**❌ Erro: O arquivo ZIP falhou ao ser salvo no disco.**", color=0x335fff))
+            except Exception:
+                pass
 
     try:
         if os.path.exists(zip_filename):
