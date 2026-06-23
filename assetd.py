@@ -206,11 +206,14 @@ async def fetch_creator_games(session: aiohttp.ClientSession, creator_id: int, c
         logger.warning(f"Falha ao buscar experiencias do criador {creator_id}: {e}")
     return games_info
 
-async def fetch_asset_details(session: aiohttp.ClientSession, asset_id: str, max_retries=10):
+async def fetch_asset_details(session: aiohttp.ClientSession, asset_id: str, cookie=None, max_retries=10):
     url = f"https://economy.roproxy.com/v2/assets/{asset_id}/details"
+    headers = {}
+    if cookie:
+        headers["Cookie"] = f".ROBLOSECURITY={cookie}"
     for attempt in range(max_retries):
         try:
-            async with session.get(url) as response:
+            async with session.get(url, headers=headers) as response:
                 if response.status == 200:
                     return await response.json()
                 elif response.status in [400, 403]:
@@ -552,13 +555,99 @@ async def fetch_version_fallback(session: aiohttp.ClientSession, asset_id: str, 
         
     return None
 
+async def download_public_video(session: aiohttp.ClientSession, asset_id: str, cookie: str, sanitized_name: str):
+    url = "https://assetdelivery.roproxy.com/v2/asset"
+    params = {
+        "Id": asset_id,
+        "ContentRepresentationPriorityList": "W3siZm9ybWF0IjoiaGxzIiwibWFqb3JWZXJzaW9uIjoiMSIsImZpZGVsaXR5IjoibWFpbiJ9XQ=="
+    }
+    headers = {"User-Agent": "Mozilla/5.0"}
+    if cookie:
+        headers["Cookie"] = f".ROBLOSECURITY={cookie}"
+        
+    async with session.get(url, params=params, headers=headers) as resp:
+        if resp.status != 200:
+            return None, f"Falha ao obter manifest HTTP {resp.status}"
+        try:
+            data = await resp.json()
+        except Exception:
+            return None, "Resposta JSON inválida"
+        
+        if not data.get("locations") or not data["locations"][0].get("location"):
+            return None, "Manifest vazio"
+        manifest_url = data["locations"][0]["location"]
+
+    parts = manifest_url.split("/manifest.m3u8")
+    base_url = parts[0]
+    query = parts[1] if len(parts) > 1 else ""
+
+    os.makedirs("downloaded_assets", exist_ok=True)
+    base_name = f"{asset_id}_{sanitized_name}"
+    
+    i = 0
+    downloaded_parts = []
+    while True:
+        part_url = f"{base_url}/720/{i:04d}.webm{query}"
+        async with session.get(part_url, headers=headers) as r:
+            if r.status != 200:
+                break
+            content = await r.read()
+            part_filename = os.path.join("downloaded_assets", f"{base_name}_part_{i:04d}.webm")
+            with open(part_filename, "wb") as f:
+                f.write(content)
+            downloaded_parts.append(part_filename)
+        i += 1
+
+    if not downloaded_parts:
+        return None, "Nenhuma parte encontrada"
+
+    list_filename = os.path.join("downloaded_assets", f"{base_name}_list.txt")
+    with open(list_filename, "w", encoding='utf-8') as f:
+        for p in downloaded_parts:
+            f.write(f"file '{os.path.basename(p)}'\n")
+
+    output_filename = os.path.join("downloaded_assets", f"{base_name}.webm")
+    cmd = [
+        "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+        "-i", os.path.basename(list_filename), "-c", "copy", os.path.basename(output_filename)
+    ]
+
+    process = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        cwd=os.path.abspath("downloaded_assets")
+    )
+    
+    try:
+        await asyncio.wait_for(process.communicate(), timeout=600)
+    except asyncio.TimeoutError:
+        try:
+            process.kill()
+        except Exception:
+            pass
+        return None, "Timeout FFmpeg"
+
+    try:
+        os.remove(list_filename)
+        for p in downloaded_parts:
+            os.remove(p)
+    except Exception:
+        pass
+
+    if process.returncode == 0 and os.path.exists(output_filename):
+        return output_filename, None
+    else:
+        return None, f"Falha FFmpeg (código {process.returncode})"
+
 async def download_core(session: aiohttp.ClientSession, asset_id: str):
-    details = await fetch_asset_details(session, asset_id)
+    details = await fetch_asset_details(session, asset_id, ROBLOX_COOKIE)
     
     asset_name = str(asset_id)
     asset_type_id = None
     creator_id = None
     creator_type = None
+    is_public = False
 
     if details and "errors" not in details:
         asset_name = details.get("Name", str(asset_id))
@@ -566,6 +655,7 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
         creator = details.get("Creator", {})
         creator_id = creator.get("CreatorTargetId")
         creator_type = creator.get("CreatorType")
+        is_public = details.get("IsPublicDomain", False)
     else:
         logger.warning(f"Asset {asset_id} - Detalhes negados (provavelmente moderado). Forcando bypass direto...")
 
@@ -576,6 +666,9 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
         msg = f"Asset {asset_id} e do tipo sem arquivo binario."
         logger.warning(msg)
         return None, msg
+
+    if is_public and asset_type_id == 62:
+        return await download_public_video(session, asset_id, ROBLOX_COOKIE, sanitized_name)
 
     asset_url = None
 
