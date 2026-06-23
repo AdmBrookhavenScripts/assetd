@@ -8,7 +8,7 @@ import zipfile
 import uuid
 import logging
 import time
-from urllib.parse import urljoin, urlparse, urlunparse, parse_qsl, urlencode
+from urllib.parse import urljoin, urlparse, urlunparse
 from colorama import init, Fore, Style
 
 init(autoreset=True)
@@ -344,141 +344,198 @@ async def convert_media(input_path: str, format: str, quality: str) -> str:
     return input_path
 
 async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, base_url: str) -> str:
-    logger.info(f"Processando playlist HLS via download de segmentos: {m3u8_path}")
+    logger.info(f"Processando playlist HLS: {m3u8_path}")
     try:
         with open(m3u8_path, 'r', encoding='utf-8') as f:
-            content = f.read()
+            m3u8_content = f.read()
 
-        # 1. Encontrar a variável RBX-BASE-URI declarada pela Roblox
-        match = re.search(r'#EXT-X-DEFINE:NAME="RBX-BASE-URI",VALUE="([^"]+)"', content)
-        if match:
-            rbx_base_uri = match.group(1)
-            content = content.replace("{$RBX-BASE-URI}", rbx_base_uri)
+        lines = m3u8_content.splitlines()
+        logger.info(f"Tipo de playlist detectada. Primeiras linhas: {lines[:5]}")
 
-        # 2. Extrair todas as sub-playlists (.m3u8) internas
-        urls_internas = re.findall(r'(https?://[^\s$.?#].[^\s]*)', content)
+        rbx_base_uri = None
+        for line in lines:
+            match = re.search(r'#EXT-X-DEFINE:NAME="RBX-BASE-URI",VALUE="([^"]+)"', line)
+            if match:
+                rbx_base_uri = match.group(1)
+                if not rbx_base_uri.endswith('/'):
+                    rbx_base_uri += '/'
+                logger.info(f"RBX-BASE-URI detectado: {rbx_base_uri}")
+                break
+
+        best_playlist_url = None
+        streams = []
         
-        if not urls_internas:
-            logger.error("Nenhuma URL de sub-playlist encontrada no arquivo master.")
-            return None
-
-        # Vamos pegar a primeira variante disponível (geralmente a de maior qualidade ou padrão)
-        sub_playlist_url = urls_internas[0]
+        for i, line in enumerate(lines):
+            if line.startswith('#EXT-X-STREAM-INF'):
+                if i + 1 < len(lines):
+                    streams.append((line, lines[i+1]))
         
-        # Copiar os parâmetros de autenticação (tokens, assinaturas) da URL original do Asset para a sub-playlist
-        parsed_base = urlparse(base_url)
-        query_params = parsed_base.query
+        logger.info(f"Quantidade de streams encontrados: {len(streams)}")
         
-        if "?" in sub_playlist_url:
-            sub_playlist_url += f"&{query_params}"
-        else:
-            sub_playlist_url += f"?{query_params}"
+        if streams:
+            best_stream = None
+            max_height = -1
 
-        # 3. Baixar o conteúdo da sub-playlist real que contém os fragmentos (.ts ou .m4s)
-        headers = {"User-Agent": "Roblox/WinInet"}
-        if ROBLOX_COOKIE:
-            headers["Cookie"] = f".ROBLOSECURITY={ROBLOX_COOKIE}"
+            for info, url in streams:
+                res_match = re.search(r'RESOLUTION=\d+x(\d+)', info)
+                if res_match:
+                    height = int(res_match.group(1))
+                    if height > max_height:
+                        max_height = height
+                        best_stream = (info, url)
 
-        async with session.get(sub_playlist_url, headers=headers) as resp:
-            if resp.status != 200:
-                logger.error(f"Erro ao baixar sub-playlist: HTTP {resp.status}")
-                return None
-            sub_content = await resp.text()
+            if best_stream:
+                best_playlist_url = best_stream[1]
+                logger.info(f"Stream selecionado (Maior Resolução): {best_stream[0]}")
+            else:
+                best_playlist_url = streams[0][1]
+                for info, url in streams:
+                    if '720' in info or '720' in url:
+                        best_playlist_url = url
+                        best_stream = (info, url)
+                        break
+                if not best_stream:
+                    best_stream = streams[0]
+                logger.info(f"Stream selecionado (Fallback): {best_stream[0]}")
 
-        # 4. Extrair as URLs dos segmentos de vídeo reais
-        # A Roblox costuma usar caminhos relativos ou completos baseados em {$RBX-BASE-URI}
-        # Vamos substituir a variável na sub-playlist também se existir
-        if match:
-            sub_content = sub_content.replace("{$RBX-BASE-URI}", rbx_base_uri)
-
-        segmentos = []
-        for line in sub_content.splitlines():
-            line = line.strip()
-            if line and not line.startswith("#"):
-                # Se for link relativo, transforma em absoluto usando o rbx_base_uri
-                if not line.startswith("http"):
-                    segment_url = urljoin(rbx_base_uri + "/", line)
-                else:
-                    segment_url = line
+        def get_url_with_auth(base_path, target_path, master_url):
+            from urllib.parse import urlparse, urlunparse, urljoin, parse_qsl, urlencode
+            
+            joined = urljoin(base_path, target_path)
+            parsed_joined = urlparse(joined)
+            parsed_master = urlparse(master_url)
+            
+            if parsed_joined.netloc == parsed_master.netloc:
+                target_params = dict(parse_qsl(parsed_joined.query))
+                master_params = dict(parse_qsl(parsed_master.query))
                 
-                # Injeta os tokens de autenticação em cada segmento individualmente
-                if "?" in segment_url:
-                    segment_url += f"&{query_params}"
-                else:
-                    segment_url += f"?{query_params}"
-                segmentos.append(segment_url)
+                for key, val in target_params.items():
+                    if val.startswith('{$') and val.endswith('}'):
+                        var_name = val[2:-1]
+                        if var_name in master_params:
+                            target_params[key] = master_params[var_name]
+                
+                for k in ['__token__', 'Expires', 'Policy', 'Signature', 'Key-Pair-Id']:
+                    if k in master_params:
+                        target_params[k] = master_params[k]
+                
+                new_query = urlencode(target_params)
+                joined = urlunparse(parsed_joined._replace(query=new_query))
+                
+            return joined
 
-        if not segmentos:
-            logger.error("Nenhum segmento de vídeo encontrado para download.")
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        }
+
+        if not best_playlist_url:
+            best_playlist_url = base_url
+            internal_m3u8_content = m3u8_content
+        else:
+            if "{$RBX-BASE-URI}" in best_playlist_url and rbx_base_uri:
+                best_playlist_url = best_playlist_url.replace(
+                    "{$RBX-BASE-URI}",
+                    rbx_base_uri.rstrip("/")
+                )
+            else:
+                best_playlist_url = get_url_with_auth(
+                    base_url,
+                    best_playlist_url,
+                    base_url
+                )
+
+            logger.info(f"URL INTERNA = {best_playlist_url}")
+
+            async with session.get(best_playlist_url, headers=headers) as resp:
+                if resp.status != 200:
+                    logger.error(f"Falha ao baixar playlist interna: {resp.status}")
+                    return None
+                internal_m3u8_content = await resp.text()
+
+        segments = [line for line in internal_m3u8_content.splitlines() if line and not line.startswith('#')]
+        
+        if not segments:
+            logger.error("Nenhum segmento encontrado na playlist HLS.")
             return None
 
         output_dir = os.path.dirname(m3u8_path) or '.'
         base_name = os.path.basename(m3u8_path).rsplit('.', 1)[0]
         
-        # Criar um arquivo txt temporário para listar os arquivos para o FFmpeg
-        concat_list_path = os.path.join(output_dir, f"list_{base_name}.txt")
-        downloaded_segments = []
+        segment_files = []
+        logger.info(f"Quantidade de segmentos encontrados: {len(segments)}")
+        logger.info(f"Baixando {len(segments)} segmentos HLS para {base_name}...")
+        
+        segments_base_path = best_playlist_url
 
-        # 5. Baixar cada segmento de vídeo sequencialmente para o disco
-        logger.info(f"Baixando {len(segmentos)} segmentos de vídeo...")
-        for idx, seg_url in enumerate(segmentos):
-            async with session.get(seg_url, headers=headers) as seg_resp:
-                if seg_resp.status == 200:
-                    seg_data = await seg_resp.read()
-                    seg_filename = os.path.join(output_dir, f"part_{idx}_{base_name}.ts")
-                    with open(seg_filename, "wb") as f_seg:
-                        f_seg.write(seg_data)
-                    downloaded_segments.append(seg_filename)
+        for i, seg in enumerate(segments):
+            seg_url = get_url_with_auth(segments_base_path, seg, base_url)
+            
+            clean_url = seg_url.split('?')[0]
+            filename = clean_url.split('/')[-1]
+            if '.' in filename:
+                ext = '.' + filename.split('.')[-1]
+            else:
+                ext = '.webm'
+            
+            seg_path = os.path.join(output_dir, f"{base_name}_seg_{i:04d}{ext}")
+            
+            async with session.get(seg_url, headers=headers) as resp:
+                if resp.status == 200:
+                    content = await resp.read()
+                    with open(seg_path, 'wb') as f:
+                        f.write(content)
+                    segment_files.append(seg_path)
+                    logger.info(f"Segmento {i:04d} baixado | Extensão: {ext} | Tamanho: {len(content)} bytes")
                 else:
-                    logger.warning(f"Falha ao baixar segmento {idx}: HTTP {seg_resp.status}")
+                    logger.error(f"Falha ao baixar segmento HLS {clean_url} (HTTP {resp.status})")
 
-        if not downloaded_segments:
-            logger.error("Falha ao baixar todos os segmentos.")
+        if not segment_files:
             return None
 
-        # Escrever a lista de arquivos no formato que o FFmpeg entende para concatenação
-        with open(concat_list_path, "w", encoding="utf-8") as f_list:
-            for seg in downloaded_segments:
-                # O FFmpeg exige caminhos absolutos ou relativos normais, usamos apenas o nome do arquivo se estiver na mesma pasta
-                f_list.write(f"file '{os.path.basename(seg)}'\n")
+        list_name = f"{base_name}_list.txt"
+        list_path = os.path.join(output_dir, list_name)
+        with open(list_path, 'w', encoding='utf-8') as f:
+            for sf in segment_files:
+                f.write(f"file '{os.path.basename(sf)}'\n")
 
-        # 6. Usar o FFmpeg localmente via Demuxer de Concatenação (operação extremamente rápida e sem erros de rede)
         webm_name = f"{base_name}.webm"
         webm_output = os.path.join(output_dir, webm_name)
+        logger.info(f"Concatenando segmentos em {webm_name}...")
         
-        cmd = [
-            'ffmpeg', '-y',
-            '-f', 'concat',
-            '-safe', '0',
-            '-i', os.path.basename(concat_list_path),
-            '-c', 'copy',
-            webm_name
-        ]
-
-        logger.info("Concatenando segmentos localmente com FFmpeg...")
+        cmd = ['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', list_name, '-c', 'copy', webm_name]
+        
         process = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
+            *cmd, 
+            stdout=asyncio.subprocess.PIPE, 
             stderr=asyncio.subprocess.PIPE,
             cwd=os.path.abspath(output_dir)
         )
-
-        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=120)
-
-        # Limpar arquivos temporários do disco
-        for seg in downloaded_segments:
-            try: os.remove(seg)
-            except Exception: pass
-        try: os.remove(concat_list_path)
-        except Exception: pass
-        try: os.remove(m3u8_path)
-        except Exception: pass
-
+        
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=600)
+        except asyncio.TimeoutError:
+            try:
+                process.kill()
+            except Exception:
+                pass
+            logger.error("FFmpeg concatenação timeout.")
+            return None
+        
         if process.returncode != 0:
-            logger.error(f"Falha na concatenação do FFmpeg. Código: {process.returncode}")
+            logger.error("Falha na reconstrução HLS.")
+            logger.error(f"Motivo: FFmpeg falhou com código de retorno {process.returncode}")
             return None
 
-        logger.info(f"Vídeo HLS reconstruído com sucesso localmente: {webm_output}")
+        logger.info(f"Resultado final da concatenação HLS: Sucesso. Salvo em {webm_output}")
+
+        try:
+            os.remove(m3u8_path)
+            os.remove(list_path)
+            for sf in segment_files:
+                os.remove(sf)
+        except Exception as e:
+            logger.warning(f"Erro ao limpar arquivos temporários HLS: {e}")
+
         return webm_output
 
     except Exception as e:
@@ -539,7 +596,7 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
 
     if asset_type_id:
         logger.info(f"Asset {asset_id} - Tentando obter URL de forma publica...")
-        asset_url = await fetch_asset_location(session, asset_id, cookie=ROBLOX_COOKIE)
+        asset_url = await fetch_asset_location(session, asset_id)
         
         if asset_url:
             logger.info(f"Asset {asset_id} - URL publica obtida com sucesso!")
@@ -570,14 +627,23 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
         asset_url = await fetch_version_fallback(session, asset_id, ROBLOX_COOKIE)
 
         if not asset_url and FALLBACK_GAMES:
-            logger.info(f"Asset {asset_id} - Tentando {len(FALLBACK_GAMES)} jogos de fallback-games.txt...")
+            logger.info(
+            f"Asset {asset_id} - Tentando {len(FALLBACK_GAMES)} jogos de fallback-games.txt..."
+            )
 
         for place_id in FALLBACK_GAMES:
-            test_url = await fetch_asset_location(session, asset_id, place_id, ROBLOX_COOKIE)
+            test_url = await fetch_asset_location(
+                session,
+                asset_id,
+                place_id,
+                ROBLOX_COOKIE
+            )
 
             if test_url:
                 asset_url = test_url
-                logger.info(f"Asset {asset_id} - URL obtida via fallback-games.txt (PlaceID: {place_id})")
+                logger.info(
+                    f"Asset {asset_id} - URL obtida via fallback-games.txt (PlaceID: {place_id})"
+                )
                 break
 
     if not asset_url:
@@ -587,17 +653,7 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
 
     try:
         logger.info(f"Asset URL: {asset_url}")
-        
-        dl_headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            "Accept": "*/*",
-            "Origin": "https://www.roblox.com",
-            "Referer": "https://www.roblox.com/"
-        }
-        if ROBLOX_COOKIE:
-            dl_headers["Cookie"] = f".ROBLOSECURITY={ROBLOX_COOKIE}"
-
-        async with session.get(asset_url, headers=dl_headers) as response:
+        async with session.get(asset_url) as response:
             if response.status != 200:
                 msg = f"Asset {asset_id} - Falha no download HTTP {response.status}."
                 logger.error(msg)
@@ -706,7 +762,7 @@ class MediaFormatView(discord.ui.View):
     def __init__(self, has_audio: bool, has_video: bool):
         super().__init__(timeout=120)
         self.audio_fmt = '.ogg'
-        self.video_fmt = '.mp4'
+        self.video_fmt = '.webm'
         self.audio_quality = 'original'
         self.video_quality = 'original'
         self.confirmed = False
@@ -719,9 +775,9 @@ class MediaFormatView(discord.ui.View):
             row_idx += 1
             
         if has_video:
-            self.add_item(FormatButton("MP4 (Original)", ".mp4", row=row_idx, is_audio=False, style=discord.ButtonStyle.primary))
+            self.add_item(FormatButton("MP4", ".mp4", row=row_idx, is_audio=False))
             self.add_item(FormatButton("MOV", ".mov", row=row_idx, is_audio=False))
-            self.add_item(FormatButton("WEBM", ".webm", row=row_idx, is_audio=False))
+            self.add_item(FormatButton("WEBM (Original)", ".webm", row=row_idx, is_audio=False, style=discord.ButtonStyle.primary))
             row_idx += 1
 
         if has_audio:
@@ -784,7 +840,7 @@ async def asset(interaction: discord.Interaction, asset_id: str):
         
     if file_path and os.path.exists(file_path):
         has_a = file_path.endswith('.ogg')
-        has_v = file_path.endswith('.webm') or file_path.endswith('.mp4')
+        has_v = file_path.endswith('.webm')
         
         if has_a or has_v:
             view = MediaFormatView(has_a, has_v)
@@ -900,7 +956,7 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
         return
 
     has_a = any(f.endswith('.ogg') for f in downloaded_files)
-    has_v = any(f.endswith('.webm') or f.endswith('.mp4') for f in downloaded_files)
+    has_v = any(f.endswith('.webm') for f in downloaded_files)
 
     try:
         if has_a or has_v:
@@ -913,7 +969,7 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
                 for f in downloaded_files:
                     if f.endswith('.ogg'):
                         f = await convert_media(f, view.audio_fmt, view.audio_quality)
-                    elif f.endswith('.webm') or f.endswith('.mp4'):
+                    elif f.endswith('.webm'):
                         f = await convert_media(f, view.video_fmt, view.video_quality)
                     new_files.append(f)
                 downloaded_files = new_files
