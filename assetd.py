@@ -434,19 +434,27 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         if ROBLOX_COOKIE:
             headers["Cookie"] = f".ROBLOSECURITY={ROBLOX_COOKIE}"
 
+        # --- INÍCIO DA CORREÇÃO ---
+        
+        # 1. Ignorar o RBX-BASE-URI da CDN de segmentos e forçar o uso da URL original.
+        # Os tokens são gerados com uma ACL estrita para o domínio/caminho master original.
+        clean_base_url = base_url.split('?')[0]
+        if not clean_base_url.endswith('/'):
+            clean_base_url += '/'
+
         if not best_playlist_url:
             best_playlist_url = base_url
             internal_m3u8_content = m3u8_content
         else:
-            if "{$RBX-BASE-URI}" in best_playlist_url and rbx_base_uri:
+            if "{$RBX-BASE-URI}" in best_playlist_url:
                 best_playlist_url = best_playlist_url.replace(
                     "{$RBX-BASE-URI}",
-                    rbx_base_uri.rstrip("/")
+                    clean_base_url.rstrip("/")
                 )
             
-            # Agora SEMPRE passamos pela função para colar os tokens no link final
+            # 2. Usar a base limpa para que o urljoin não exclua o ID final do asset
             best_playlist_url = get_url_with_auth(
-                base_url,
+                clean_base_url,
                 best_playlist_url,
                 base_url
             )
@@ -475,14 +483,20 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         segments_base_path = best_playlist_url
 
         for i, seg in enumerate(segments):
+            # 3. Aplicar a mesma regra para os segmentos, caso referenciem o RBX-BASE-URI
+            if "{$RBX-BASE-URI}" in seg:
+                seg = seg.replace("{$RBX-BASE-URI}", clean_base_url.rstrip("/"))
+                
             seg_url = get_url_with_auth(segments_base_path, seg, base_url)
+            
+        # --- FIM DA CORREÇÃO ---
             
             clean_url = seg_url.split('?')[0]
             filename = clean_url.split('/')[-1]
             if '.' in filename:
                 ext = '.' + filename.split('.')[-1]
             else:
-                ext = '.webm'
+                ext = '.webm'                
             
             seg_path = os.path.join(output_dir, f"{base_name}_seg_{i:04d}{ext}")
             
