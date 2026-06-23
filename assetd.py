@@ -399,19 +399,40 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
                 logger.info(f"Stream selecionado (Fallback): {best_stream[0]}")
 
         def get_url_with_auth(base_path, target_path, master_url):
+            from urllib.parse import urlparse, urlunparse, urljoin, parse_qsl, urlencode
+            
             joined = urljoin(base_path, target_path)
             parsed_joined = urlparse(joined)
             parsed_master = urlparse(master_url)
             
-            if not urlparse(target_path).query:
-                if parsed_joined.netloc == parsed_master.netloc:
-                    joined = urlunparse(parsed_joined._replace(query=parsed_master.query))
+            target_params = dict(parse_qsl(parsed_joined.query))
+            master_params = dict(parse_qsl(parsed_master.query))
+            
+            for key, val in target_params.items():
+                if val.startswith('{$') and val.endswith('}'):
+                    var_name = val[2:-1]
+                    if var_name in master_params:
+                        target_params[key] = master_params[var_name]
+            
+            # Força a injeção dos tokens em QUALQUER domínio da CDN
+            for k in ['__token__', 'Expires', 'Policy', 'Signature', 'Key-Pair-Id', 'hdnts']:
+                if k in master_params:
+                    target_params[k] = master_params[k]
+            
+            new_query = urlencode(target_params)
+            joined = urlunparse(parsed_joined._replace(query=new_query))
                 
             return joined
 
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Referer": "https://www.roblox.com/",
+            "Origin": "https://www.roblox.com/",
+            "Accept-Encoding": "gzip, deflate"
         }
+        
+        if ROBLOX_COOKIE:
+            headers["Cookie"] = f".ROBLOSECURITY={ROBLOX_COOKIE}"
 
         if not best_playlist_url:
             best_playlist_url = base_url
@@ -422,14 +443,15 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
                     "{$RBX-BASE-URI}",
                     rbx_base_uri.rstrip("/")
                 )
-            else:
-                best_playlist_url = get_url_with_auth(
-                    base_url,
-                    best_playlist_url,
-                    base_url
-                )
+            
+            # Agora SEMPRE passamos pela função para colar os tokens no link final
+            best_playlist_url = get_url_with_auth(
+                base_url,
+                best_playlist_url,
+                base_url
+            )
 
-            logger.info(f"URL INTERNA = {best_playlist_url}")
+            logger.info(f"URL INTERNA COM TOKENS = {best_playlist_url}")
 
             async with session.get(best_playlist_url, headers=headers) as resp:
                 if resp.status != 200:
