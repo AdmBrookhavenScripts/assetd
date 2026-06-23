@@ -350,8 +350,7 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
             m3u8_content = f.read()
 
         lines = m3u8_content.splitlines()
-        logger.info(f"Tipo de playlist detectada. Primeiras linhas: {lines[:5]}")
-
+        
         rbx_base_uri = None
         for line in lines:
             match = re.search(r'#EXT-X-DEFINE:NAME="RBX-BASE-URI",VALUE="([^"]+)"', line)
@@ -359,7 +358,6 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
                 rbx_base_uri = match.group(1)
                 if not rbx_base_uri.endswith('/'):
                     rbx_base_uri += '/'
-                logger.info(f"RBX-BASE-URI detectado: {rbx_base_uri}")
                 break
 
         best_playlist_url = None
@@ -369,8 +367,6 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
             if line.startswith('#EXT-X-STREAM-INF'):
                 if i + 1 < len(lines):
                     streams.append((line, lines[i+1]))
-        
-        logger.info(f"Quantidade de streams encontrados: {len(streams)}")
         
         if streams:
             best_stream = None
@@ -386,80 +382,44 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
 
             if best_stream:
                 best_playlist_url = best_stream[1]
-                logger.info(f"Stream selecionado (Maior Resolução): {best_stream[0]}")
             else:
                 best_playlist_url = streams[0][1]
-                for info, url in streams:
-                    if '720' in info or '720' in url:
-                        best_playlist_url = url
-                        best_stream = (info, url)
-                        break
-                if not best_stream:
-                    best_stream = streams[0]
-                logger.info(f"Stream selecionado (Fallback): {best_stream[0]}")
 
         def get_url_with_auth(base_path, target_path, master_url):
-            from urllib.parse import urlparse, urlunparse, urljoin, parse_qsl, urlencode
-            
             joined = urljoin(base_path, target_path)
             parsed_joined = urlparse(joined)
             parsed_master = urlparse(master_url)
             
-            target_params = dict(parse_qsl(parsed_joined.query))
-            master_params = dict(parse_qsl(parsed_master.query))
-            
-            for key, val in target_params.items():
-                if val.startswith('{$') and val.endswith('}'):
-                    var_name = val[2:-1]
-                    if var_name in master_params:
-                        target_params[key] = master_params[var_name]
-            
-            # Força a injeção dos tokens em QUALQUER domínio da CDN
-            for k in ['__token__', 'Expires', 'Policy', 'Signature', 'Key-Pair-Id', 'hdnts']:
-                if k in master_params:
-                    target_params[k] = master_params[k]
-            
-            new_query = urlencode(target_params)
-            joined = urlunparse(parsed_joined._replace(query=new_query))
+            # CORREÇÃO: Forçar a adição da query (tokens) independentemente do netloc bater
+            if not urlparse(target_path).query:
+                joined = urlunparse(parsed_joined._replace(query=parsed_master.query))
                 
             return joined
 
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-            "Referer": "https://www.roblox.com/",
-            "Origin": "https://www.roblox.com/",
-            "Accept-Encoding": "gzip, deflate"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         }
-        
-        if ROBLOX_COOKIE:
-            headers["Cookie"] = f".ROBLOSECURITY={ROBLOX_COOKIE}"
-
-        # --- INÍCIO DA CORREÇÃO ---
-        
-        # 1. Ignorar o RBX-BASE-URI da CDN de segmentos e forçar o uso da URL original.
-        # Os tokens são gerados com uma ACL estrita para o domínio/caminho master original.
-        clean_base_url = base_url.split('?')[0]
-        if not clean_base_url.endswith('/'):
-            clean_base_url += '/'
 
         if not best_playlist_url:
             best_playlist_url = base_url
             internal_m3u8_content = m3u8_content
         else:
-            if "{$RBX-BASE-URI}" in best_playlist_url:
+            if "{$RBX-BASE-URI}" in best_playlist_url and rbx_base_uri:
                 best_playlist_url = best_playlist_url.replace(
                     "{$RBX-BASE-URI}",
-                    clean_base_url.rstrip("/")
+                    rbx_base_uri.rstrip("/")
                 )
-            
-            # 2. Usar a base limpa para que o urljoin não exclua o ID final do asset
-            best_playlist_url = get_url_with_auth(
-                clean_base_url,
-                best_playlist_url,
-                base_url
-            )
-
-            logger.info(f"URL INTERNA COM TOKENS = {best_playlist_url}")
+                # CORREÇÃO: Recuperar os tokens ao usar o RBX-BASE-URI
+                parsed_best = urlparse(best_playlist_url)
+                parsed_base = urlparse(base_url)
+                if not parsed_best.query:
+                    best_playlist_url = urlunparse(parsed_best._replace(query=parsed_base.query))
+            else:
+                best_playlist_url = get_url_with_auth(
+                    base_url,
+                    best_playlist_url,
+                    base_url
+                )
 
             async with session.get(best_playlist_url, headers=headers) as resp:
                 if resp.status != 200:
@@ -477,26 +437,14 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         base_name = os.path.basename(m3u8_path).rsplit('.', 1)[0]
         
         segment_files = []
-        logger.info(f"Quantidade de segmentos encontrados: {len(segments)}")
-        logger.info(f"Baixando {len(segments)} segmentos HLS para {base_name}...")
-        
         segments_base_path = best_playlist_url
 
         for i, seg in enumerate(segments):
-            # 3. Aplicar a mesma regra para os segmentos, caso referenciem o RBX-BASE-URI
-            if "{$RBX-BASE-URI}" in seg:
-                seg = seg.replace("{$RBX-BASE-URI}", clean_base_url.rstrip("/"))
-                
             seg_url = get_url_with_auth(segments_base_path, seg, base_url)
-            
-        # --- FIM DA CORREÇÃO ---
             
             clean_url = seg_url.split('?')[0]
             filename = clean_url.split('/')[-1]
-            if '.' in filename:
-                ext = '.' + filename.split('.')[-1]
-            else:
-                ext = '.webm'                
+            ext = '.' + filename.split('.')[-1] if '.' in filename else '.webm'
             
             seg_path = os.path.join(output_dir, f"{base_name}_seg_{i:04d}{ext}")
             
@@ -506,7 +454,6 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
                     with open(seg_path, 'wb') as f:
                         f.write(content)
                     segment_files.append(seg_path)
-                    logger.info(f"Segmento {i:04d} baixado | Extensão: {ext} | Tamanho: {len(content)} bytes")
                 else:
                     logger.error(f"Falha ao baixar segmento HLS {clean_url} (HTTP {resp.status})")
 
@@ -521,7 +468,6 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
 
         webm_name = f"{base_name}.webm"
         webm_output = os.path.join(output_dir, webm_name)
-        logger.info(f"Concatenando segmentos em {webm_name}...")
         
         cmd = ['ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', list_name, '-c', 'copy', webm_name]
         
@@ -533,29 +479,24 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
         )
         
         try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=600)
+            await asyncio.wait_for(process.communicate(), timeout=600)
         except asyncio.TimeoutError:
             try:
                 process.kill()
             except Exception:
                 pass
-            logger.error("FFmpeg concatenação timeout.")
             return None
         
         if process.returncode != 0:
-            logger.error("Falha na reconstrução HLS.")
-            logger.error(f"Motivo: FFmpeg falhou com código de retorno {process.returncode}")
             return None
-
-        logger.info(f"Resultado final da concatenação HLS: Sucesso. Salvo em {webm_output}")
 
         try:
             os.remove(m3u8_path)
             os.remove(list_path)
             for sf in segment_files:
                 os.remove(sf)
-        except Exception as e:
-            logger.warning(f"Erro ao limpar arquivos temporários HLS: {e}")
+        except Exception:
+            pass
 
         return webm_output
 
