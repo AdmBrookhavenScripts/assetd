@@ -399,28 +399,13 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
                 logger.info(f"Stream selecionado (Fallback): {best_stream[0]}")
 
         def get_url_with_auth(base_path, target_path, master_url):
-            from urllib.parse import urlparse, urlunparse, urljoin, parse_qsl, urlencode
-            
             joined = urljoin(base_path, target_path)
             parsed_joined = urlparse(joined)
             parsed_master = urlparse(master_url)
             
-            if parsed_joined.netloc == parsed_master.netloc:
-                target_params = dict(parse_qsl(parsed_joined.query))
-                master_params = dict(parse_qsl(parsed_master.query))
-                
-                for key, val in target_params.items():
-                    if val.startswith('{$') and val.endswith('}'):
-                        var_name = val[2:-1]
-                        if var_name in master_params:
-                            target_params[key] = master_params[var_name]
-                
-                for k in ['__token__', 'Expires', 'Policy', 'Signature', 'Key-Pair-Id']:
-                    if k in master_params:
-                        target_params[k] = master_params[k]
-                
-                new_query = urlencode(target_params)
-                joined = urlunparse(parsed_joined._replace(query=new_query))
+            if not urlparse(target_path).query:
+                if parsed_joined.netloc == parsed_master.netloc:
+                    joined = urlunparse(parsed_joined._replace(query=parsed_master.query))
                 
             return joined
 
