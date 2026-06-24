@@ -469,11 +469,13 @@ async def process_hls_playlist(session: aiohttp.ClientSession, m3u8_path: str, b
             
             async with session.get(seg_url, headers=headers) as resp:
                 if resp.status == 200:
-                    content = await resp.read()
+                    size = 0
                     with open(seg_path, 'wb') as f:
-                        f.write(content)
+                        async for chunk in resp.content.iter_chunked(65536):
+                            f.write(chunk)
+                            size += len(chunk)
                     segment_files.append(seg_path)
-                    logger.info(f"Segmento {i:04d} baixado | Extensão: {ext} | Tamanho: {len(content)} bytes")
+                    logger.info(f"Segmento {i:04d} baixado | Extensão: {ext} | Tamanho: {size} bytes")
                 else:
                     logger.error(f"Falha ao baixar segmento HLS {clean_url} (HTTP {resp.status})")
 
@@ -591,10 +593,10 @@ async def download_public_video(session: aiohttp.ClientSession, asset_id: str, c
         async with session.get(part_url, headers=headers) as r:
             if r.status != 200:
                 break
-            content = await r.read()
             part_filename = os.path.join("downloaded_assets", f"{base_name}_part_{i:04d}.webm")
             with open(part_filename, "wb") as f:
-                f.write(content)
+                async for chunk in r.content.iter_chunked(65536):
+                    f.write(chunk)
             downloaded_parts.append(part_filename)
         i += 1
 
@@ -743,15 +745,14 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
                 logger.error(msg)
                 return None, msg
 
-            content = await response.read()
+            first_chunk = await response.content.read(1024)
 
-            logger.info(f"Tamanho do arquivo: {len(content)} bytes")
-            if len(content) == 0:
+            if not first_chunk:
                 msg = f"Asset {asset_id} - Arquivo vazio retornado."
                 logger.error(msg)
                 return None, msg
 
-            final_ext = detect_file_extension(content, content_type, '.bin')
+            final_ext = detect_file_extension(first_chunk, content_type, '.bin')
 
             logger.info(f"Content-Type: {content_type}")
             logger.info(f"Extensão detectada: {final_ext}")
@@ -759,8 +760,14 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
             os.makedirs("downloaded_assets", exist_ok=True)
             file_path = os.path.join("downloaded_assets", f"{asset_id}_{sanitized_name}{final_ext}")
             
+            total_size = len(first_chunk)
             with open(file_path, "wb") as f:
-                f.write(content)
+                f.write(first_chunk)
+                async for chunk in response.content.iter_chunked(65536):
+                    f.write(chunk)
+                    total_size += len(chunk)
+
+            logger.info(f"Tamanho do arquivo: {total_size} bytes")
             
             if final_ext == '.m3u8':
                 logger.info(f"Asset {asset_id} - Playlist HLS detectada. Iniciando reconstrução...")
