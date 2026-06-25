@@ -851,7 +851,7 @@ class ConfirmButton(discord.ui.Button):
 
 class MediaFormatView(discord.ui.View):
     def __init__(self, has_audio: bool, has_video: bool):
-        super().__init__(timeout=120)
+        super().__init__(timeout=60)
         self.audio_fmt = '.ogg'
         self.video_fmt = '.webm'
         self.audio_quality = 'original'
@@ -894,6 +894,12 @@ client = RobloxAssetBot()
 
 @client.tree.command(name="asset", description="Baixa um unico asset do Roblox de forma segura")
 async def asset(interaction: discord.Interaction, asset_id: str):
+    clean_id = asset_id.strip()
+    if not clean_id.isdigit():
+        err_embed = discord.Embed(title="❌️ Erro", description="**ID inválido. Apenas números são permitidos.**", color=0xFF0000)
+        await interaction.response.send_message(embed=err_embed)
+        return
+
     state = {"current": 0, "total": 1, "running": True, "in_flight": False}
     await interaction.response.send_message(embed=discord.Embed(title="⌛️ Processando...", description=f"**{state['current']}/{state['total']} Assets\n`🟩⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️`\n\nTempo estimado: 9s**", color=0xFFA500))
     
@@ -918,8 +924,6 @@ async def asset(interaction: discord.Interaction, asset_id: str):
             state["in_flight"] = False
 
     ptask = asyncio.create_task(progress_task())
-    
-    clean_id = asset_id.strip()
     
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=600)) as session:
         file_path, error = await download_core(session, clean_id)
@@ -947,6 +951,19 @@ async def asset(interaction: discord.Interaction, asset_id: str):
                 fmt = view.audio_fmt if has_a else view.video_fmt
                 qual = view.audio_quality if has_a else view.video_quality
                 file_path = await convert_media(file_path, fmt, qual)
+            else:
+                timeout_embed = discord.Embed(title="⏰️ Essa sessão expirou", color=0xFF0000)
+                timeout_embed.add_field(name="Informações", value="Essa sessão expirou devido ao tempo limite de espera.")
+                try:
+                    await interaction.edit_original_response(content=None, embed=timeout_embed, view=None)
+                except discord.errors.HTTPException:
+                    pass
+                try:
+                    if os.path.exists(file_path):
+                        os.remove(file_path)
+                except Exception:
+                    pass
+                return
             
         if os.path.getsize(file_path) > 10 * 1024 * 1024:
             wait_embed = discord.Embed(title="⌛️ Espere...", description="O arquivo excede 10MB. Enviando para o **Gofile** (isso pode demorar)...", color=0xFFA500)
@@ -1002,9 +1019,16 @@ async def asset(interaction: discord.Interaction, asset_id: str):
 async def assetbatch(interaction: discord.Interaction, asset_ids: str):
     raw_ids = [x.strip() for x in asset_ids.split(',') if x.strip()]
     ids_list = []
+    failed_ids = []
+    errors = []
     for x in raw_ids:
-        if x not in ids_list:
-            ids_list.append(x)
+        if x.isdigit():
+            if x not in ids_list:
+                ids_list.append(x)
+        else:
+            if x not in failed_ids:
+                failed_ids.append(x)
+                errors.append(f"{x}: Ignorado por não ser um número")
             
     if len(ids_list) > 20:
         await interaction.response.send_message(embed=discord.Embed(title="❌️ Limite Excedido", description="Por favor, limite a 20 assets por lote para evitar sobrecarga.", color=0xFF0000))
@@ -1037,8 +1061,6 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
     ptask = asyncio.create_task(progress_task())
 
     downloaded_files = []
-    errors = []
-    failed_ids = []
 
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=600)) as session:
         results = []
@@ -1105,7 +1127,19 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
                 downloaded_files = new_files
                 await interaction.edit_original_response(content=None, embed=discord.Embed(title="🗜️ Compactando...", description="Criando ZIP...", color=0xFFA500), view=None)
             else:
-                await interaction.edit_original_response(content=None, embed=discord.Embed(title="🗜️ Compactando...", description="Tempo esgotado. Mantendo os arquivos originais e criando ZIP...", color=0xFFA500), view=None)
+                timeout_embed = discord.Embed(title="⏰️ Essa sessão expirou", color=0xFF0000)
+                timeout_embed.add_field(name="Informações", value="Essa sessão expirou devido ao tempo limite de espera.")
+                try:
+                    await interaction.edit_original_response(content=None, embed=timeout_embed, view=None)
+                except discord.errors.HTTPException:
+                    pass
+                for file in downloaded_files:
+                    try:
+                        if os.path.exists(file):
+                            os.remove(file)
+                    except Exception:
+                        pass
+                return
         else:
             await interaction.edit_original_response(content=None, embed=discord.Embed(title="🗜️ Compactando...", description="Criando ZIP...", color=0xFFA500), view=None)
     except discord.errors.HTTPException:
