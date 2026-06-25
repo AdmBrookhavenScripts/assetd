@@ -805,7 +805,10 @@ class FormatButton(discord.ui.Button):
             if isinstance(child, FormatButton) and child.is_audio == self.is_audio:
                 child.style = discord.ButtonStyle.primary if child.fmt == self.fmt else discord.ButtonStyle.secondary
                 
-        await interaction.response.edit_message(view=self.view)
+        kwargs = {"view": self.view}
+        if interaction.message.embeds:
+            kwargs["embed"] = interaction.message.embeds[0]
+        await interaction.response.edit_message(**kwargs)
 
 class QualitySelect(discord.ui.Select):
     def __init__(self, is_audio: bool, row: int):
@@ -891,7 +894,7 @@ client = RobloxAssetBot()
 
 @client.tree.command(name="asset", description="Baixa um unico asset do Roblox de forma segura")
 async def asset(interaction: discord.Interaction, asset_id: str):
-    state = {"current": 0, "total": 1, "running": True}
+    state = {"current": 0, "total": 1, "running": True, "in_flight": False}
     await interaction.response.send_message(embed=discord.Embed(title="⌛️ Processando...", description=f"**{state['current']}/{state['total']} Assets\n`🟩⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️`\n\nTempo estimado: 9s**", color=0xFFA500))
     
     async def progress_task():
@@ -904,12 +907,15 @@ async def asset(interaction: discord.Interaction, asset_id: str):
                 i += 1
                 desc = f"**{state['current']}/{state['total']} Assets\n`{'🟩' * i}{'⬜' * (10 - i)}`\n\nTempo estimado: {10 - i}s**"
                 if state["running"]:
+                    state["in_flight"] = True
                     try:
                         await interaction.edit_original_response(content=None, embed=discord.Embed(title="⌛️ Processando...", description=desc, color=0xFFA500), view=None)
                     except Exception:
                         pass
+                    finally:
+                        state["in_flight"] = False
         except asyncio.CancelledError:
-            pass
+            state["in_flight"] = False
 
     ptask = asyncio.create_task(progress_task())
     
@@ -920,6 +926,8 @@ async def asset(interaction: discord.Interaction, asset_id: str):
         state["current"] = 1
         
     state["running"] = False
+    while state.get("in_flight", False):
+        await asyncio.sleep(0.1)
     ptask.cancel()
     try:
         await ptask
@@ -1002,7 +1010,7 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
         await interaction.response.send_message(embed=discord.Embed(title="❌️ Limite Excedido", description="Por favor, limite a 20 assets por lote para evitar sobrecarga.", color=0xFF0000))
         return
 
-    state = {"current": 0, "total": len(ids_list), "running": True}
+    state = {"current": 0, "total": len(ids_list), "running": True, "in_flight": False}
     await interaction.response.send_message(embed=discord.Embed(title="⌛️ Processando...", description=f"**0/{state['total']} Assets\n`🟩⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️⬜️`\n\nTempo estimado: 13s**", color=0xFFA500))
     
     async def progress_task():
@@ -1016,12 +1024,15 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
                 est = max(1, int((10 - i) * 1.5))
                 desc = f"**{state['current']}/{state['total']} Assets\n`{'🟩' * i}{'⬜️' * (10 - i)}`\n\nTempo estimado: {est}s**"
                 if state["running"]:
+                    state["in_flight"] = True
                     try:
                         await interaction.edit_original_response(content=None, embed=discord.Embed(title="⌛️ Processando...", description=desc, color=0xFFA500), view=None)
                     except Exception:
                         pass
+                    finally:
+                        state["in_flight"] = False
         except asyncio.CancelledError:
-            pass
+            state["in_flight"] = False
 
     ptask = asyncio.create_task(progress_task())
 
@@ -1053,6 +1064,8 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
             errors.append(f"Exceção severa: {str(res)}")
 
     state["running"] = False
+    while state.get("in_flight", False):
+        await asyncio.sleep(0.1)
     ptask.cancel()
     try:
         await ptask
