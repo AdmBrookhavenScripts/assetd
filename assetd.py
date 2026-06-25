@@ -863,13 +863,13 @@ class MediaFormatView(discord.ui.View):
             self.add_item(FormatButton("MP3", ".mp3", row=row_idx, is_audio=True))
             self.add_item(FormatButton("WAV", ".wav", row=row_idx, is_audio=True))
             self.add_item(FormatButton("FLAC", ".flac", row=row_idx, is_audio=True))
-            self.add_item(FormatButton("OGG (Original)", ".ogg", row=row_idx, is_audio=True, style=discord.ButtonStyle.primary))
+            self.add_item(FormatButton("OGG", ".ogg", row=row_idx, is_audio=True, style=discord.ButtonStyle.primary))
             row_idx += 1
             
         if has_video:
             self.add_item(FormatButton("MP4", ".mp4", row=row_idx, is_audio=False))
             self.add_item(FormatButton("MOV", ".mov", row=row_idx, is_audio=False))
-            self.add_item(FormatButton("WEBM (Original)", ".webm", row=row_idx, is_audio=False, style=discord.ButtonStyle.primary))
+            self.add_item(FormatButton("WEBM", ".webm", row=row_idx, is_audio=False, style=discord.ButtonStyle.primary))
             row_idx += 1
 
         if has_audio:
