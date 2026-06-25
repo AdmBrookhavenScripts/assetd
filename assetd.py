@@ -203,7 +203,7 @@ async def fetch_creator_games(session: aiohttp.ClientSession, creator_id: int, c
                     if pid or uid:
                         games_info.append({"place_id": pid, "universe_id": uid})
     except Exception as e:
-        logger.warning(f"Falha ao buscar experiencias do criador {creator_id}: {e}")
+        logger.warning(f"Falha ao buscar experiências do criador {creator_id}: {e}")
     return games_info
 
 async def fetch_asset_details(session: aiohttp.ClientSession, asset_id: str, cookie=None, max_retries=10):
@@ -257,7 +257,7 @@ async def fetch_asset_location(session: aiohttp.ClientSession, asset_id: str, pl
                     if obj.get("locations") and obj["locations"][0].get("location"):
                         return obj["locations"][0]["location"]
     except Exception as e:
-        logger.debug(f"Erro ao buscar localizacao do asset {asset_id} (Place: {place_id}, Universe: {universe_id}): {e}")
+        logger.debug(f"Erro ao buscar localização do asset {asset_id} (Place: {place_id}, Universe: {universe_id}): {e}")
     return None
 
 def sanitize_filename(name: str) -> str:
@@ -551,10 +551,10 @@ async def fetch_version_fallback(session: aiohttp.ClientSession, asset_id: str, 
                 if response.status == 200:
                     content_type = response.headers.get('Content-Type', '')
                     if 'text/html' not in content_type.lower() and 'application/json' not in content_type.lower():
-                        logger.info(f"Asset {asset_id} - Sucesso ao recuperar a versao {version} que escapou da moderacao!")
+                        logger.info(f"Asset {asset_id} - Sucesso ao recuperar a versão {version} que escapou da moderacao!")
                         return url
         except Exception as e:
-            logger.debug(f"Erro ao testar versao {version} do asset {asset_id}: {e}")
+            logger.debug(f"Erro ao testar versão {version} do asset {asset_id}: {e}")
             
         await asyncio.sleep(0.5)
         
@@ -662,13 +662,13 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
         creator_type = creator.get("CreatorType")
         is_public = details.get("IsPublicDomain", False)
     else:
-        logger.warning(f"Asset {asset_id} - Detalhes negados (provavelmente moderado). Forcando bypass direto...")
+        logger.warning(f"Asset {asset_id} - Detalhes negados (provavelmente moderado). Forçando do bypass direto...")
 
     sanitized_name = sanitize_filename(asset_name)
     logger.info(f"Processando Asset {asset_id} | Nome: {sanitized_name} | TypeID: {asset_type_id}")
 
     if asset_type_id in NO_BINARY_TYPES:
-        msg = f"Asset {asset_id} e do tipo sem arquivo binario."
+        msg = f"Asset {asset_id} e do tipo sem arquivo binário."
         logger.warning(msg)
         return None, msg
 
@@ -678,13 +678,13 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
     asset_url = None
 
     if asset_type_id:
-        logger.info(f"Asset {asset_id} - Tentando obter URL de forma publica...")
+        logger.info(f"Asset {asset_id} - Tentando obter URL de forma pública...")
         asset_url = await fetch_asset_location(session, asset_id)
         
         if asset_url:
-            logger.info(f"Asset {asset_id} - URL publica obtida com sucesso!")
+            logger.info(f"Asset {asset_id} - URL pública obtida com sucesso!")
         else:
-            logger.info(f"Asset {asset_id} - Acesso publico negado. Tentando fallback com PlaceIds/UniverseIds e Cookie...")
+            logger.info(f"Asset {asset_id} - Acesso público negado. Tentando fallback com PlaceIds/UniverseIds e Cookie...")
             
             if creator_id:
                 games_info = await fetch_creator_games(session, creator_id, creator_type)
@@ -701,12 +701,12 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
                                 logger.info(f"Asset {asset_id} - URL obtida via fallback (UniverseID: {g['universe_id']}).")
                                 break
                 else:
-                    logger.warning(f"Asset {asset_id} - Nenhuma experiencia encontrada para o criador.")
+                    logger.warning(f"Asset {asset_id} - Nenhuma experiência encontrada para o criador.")
             else:
-                logger.error(f"Asset {asset_id} - Nao foi possivel obter o criador do asset para o fallback.")
+                logger.error(f"Asset {asset_id} - Não foi possivel obter o criador do asset para o fallback.")
 
     if not asset_url:
-        logger.info(f"Asset {asset_id} - Tentando bypass de historico de versoes (forçado)...")
+        logger.info(f"Asset {asset_id} - Tentando bypass de histórico de versoes (forçado)...")
         asset_url = await fetch_version_fallback(session, asset_id, ROBLOX_COOKIE)
 
         if not asset_url and FALLBACK_GAMES:
@@ -730,7 +730,7 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
                 break
 
     if not asset_url:
-        msg = f"Asset {asset_id} - URL de download inacessivel. O item provavelmente foi excluido permanentemente e não possui versões salvas."
+        msg = f"Asset {asset_id} - Asset inacessível: O asset provavelmente foi excluído permanentemente e não possui versões salvas."
         logger.error(msg)
         return None, msg
 
@@ -744,7 +744,7 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
 
             content_type = response.headers.get('Content-Type', '')
             if 'text/html' in content_type.lower() or 'application/json' in content_type.lower():
-                msg = f"Asset {asset_id} - Arquivo invalido retornado (HTML/JSON de erro)."
+                msg = f"Asset {asset_id} - Arquivo inválido retornado (HTML/JSON de erro)."
                 logger.error(msg)
                 return None, msg
 
@@ -785,7 +785,7 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
             return file_path, None
             
     except Exception as e:
-        msg = f"Asset {asset_id} - Erro interno na conexao de download: {str(e)}"
+        msg = f"Asset {asset_id} - Erro interno na conexão de download: {str(e)}"
         logger.error(msg)
         return None, msg
 
@@ -892,11 +892,11 @@ class RobloxAssetBot(discord.Client):
 
 client = RobloxAssetBot()
 
-@client.tree.command(name="asset", description="Baixa um unico asset do Roblox de forma segura")
+@client.tree.command(name="asset", description="Baixa um único asset do Roblox de forma segura")
 async def asset(interaction: discord.Interaction, asset_id: str):
     clean_id = asset_id.strip()
     if not clean_id.isdigit():
-        err_embed = discord.Embed(title="❌️ Erro", description="**ID inválido. Apenas números são permitidos.**", color=0xFF0000)
+        err_embed = discord.Embed(title="❌️ Erro", description="**ID inválido: Apenas números são permitidos.**", color=0xFF0000)
         await interaction.response.send_message(embed=err_embed)
         return
 
@@ -944,7 +944,7 @@ async def asset(interaction: discord.Interaction, asset_id: str):
         
         if has_a or has_v:
             view = MediaFormatView(has_a, has_v)
-            await interaction.edit_original_response(content=None, embed=discord.Embed(title="⚙️ Formatos e Qualidades", description="Mídia detectada! Selecione os formatos e qualidades:", color=0x335FFF), view=view)
+            await interaction.edit_original_response(content=None, embed=discord.Embed(title="⚙️ Formatos e Qualidades", description="Mídia detectada! Selecione os formatos e qualidades:", color=0x74D8FA), view=view)
             await view.wait()
             
             if view.confirmed:
@@ -1096,7 +1096,7 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
 
     if not downloaded_files:
         err_msg = "\n".join(errors)[:1020]
-        total_fail_embed = discord.Embed(title="❌️ Falha Total", description="Falha total no lote. Nenhum arquivo foi salvo.", color=0xFF0000)
+        total_fail_embed = discord.Embed(title="❌️ Falha Total", description="Falha total no lote: Nenhum arquivo foi salvo.", color=0xFF0000)
         total_fail_embed.add_field(name="❌️ Erros", value=err_msg, inline=False)
         try:
             await interaction.edit_original_response(content=None, embed=total_fail_embed, view=None)
@@ -1113,7 +1113,7 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
     try:
         if has_a or has_v:
             view = MediaFormatView(has_a, has_v)
-            await interaction.edit_original_response(content=None, embed=discord.Embed(title="⚙️ Formatos e Qualidades", description="Mídias detectadas no lote! Selecione os formatos e qualidades:", color=0x335FFF), view=view)
+            await interaction.edit_original_response(content=None, embed=discord.Embed(title="⚙️ Formatos e Qualidades", description="Mídias detectadas no lote! Selecione os formatos e qualidades:", color=0x74D8FA), view=view)
             await view.wait()
             
             if view.confirmed:
