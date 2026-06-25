@@ -730,7 +730,7 @@ async def download_core(session: aiohttp.ClientSession, asset_id: str):
                 break
 
     if not asset_url:
-        msg = f"Asset ''{asset_id}'' - Asset inacessível: O asset provavelmente foi excluído permanentemente."
+        msg = f"Asset ''{asset_id}'' inacessível: O asset provavelmente foi excluído permanentemente."
         logger.error(msg)
         return None, msg
 
