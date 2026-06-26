@@ -209,9 +209,7 @@ async def fetch_creator_games(session: aiohttp.ClientSession, creator_id: int, c
 async def fetch_asset_details(session: aiohttp.ClientSession, asset_id: str, cookie=None, max_retries=10):
     url = f"https://economy.roproxy.com/v2/assets/{asset_id}/details"
     
-    headers = {
-        "Accept-Language": "en-US,en;q=0.9"
-    }
+    headers = {}
     
     if cookie:
         headers["Cookie"] = f".ROBLOSECURITY={cookie}"
