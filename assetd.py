@@ -895,7 +895,7 @@ class RobloxAssetBot(discord.Client):
 
 client = RobloxAssetBot()
 
-@client.tree.command(name="asset", description="Baixa um único asset do Roblox de forma segura")
+@client.tree.command(name="asset", description="Baixa um único asset do Roblox")
 async def asset(interaction: discord.Interaction, asset_id: str):
     clean_id = asset_id.strip()
     if not clean_id.isdigit():
@@ -1018,7 +1018,7 @@ async def asset(interaction: discord.Interaction, asset_id: str):
             except Exception:
                 pass
 
-@client.tree.command(name="assetbatch", description="Baixa multiplos assets e retorna um arquivo ZIP limpo")
+@client.tree.command(name="assetbatch", description="Baixa multiplos assets e retorna um arquivo ZIP")
 async def assetbatch(interaction: discord.Interaction, asset_ids: str):
     raw_ids = [x.strip() for x in asset_ids.split(',') if x.strip()]
     ids_list = []
