@@ -982,7 +982,7 @@ async def asset(interaction: discord.Interaction, asset_id: str):
 
             done_gofile = discord.Embed(title="✅️ Concluído", color=0x00FF00)
             done_gofile.add_field(name="📁 Arquivo processado", value="**1 arquivo processado.**", inline=False)
-            done_gofile.add_field(name="🔗 Download", value=f"O arquivo excedeu o limite de 10MB do Discord. Link do **Gofile**: **{gofile_url}**", inline=False)
+            done_gofile.add_field(name="🔗 Download", value=f"**{gofile_url}**", inline=False)
 
             try:
                 await interaction.edit_original_response(content=None, embed=done_gofile, view=None)
@@ -1202,7 +1202,7 @@ async def assetbatch(interaction: discord.Interaction, asset_ids: str):
 
             gofile_url = await upload_gofile(zip_filename)
 
-            final_embed.add_field(name="🔗 Download", value=f"O arquivo ZIP excedeu o limite de 10MB do Discord. Link do **Gofile**: **{gofile_url}**", inline=False)
+            final_embed.add_field(name="🔗 Download", value=f"**{gofile_url}**", inline=False)
             
             try:
                 await interaction.edit_original_response(content=None, embed=final_embed, view=None)
